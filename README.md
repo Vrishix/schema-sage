@@ -9,6 +9,16 @@ relationship is labelled by how strongly it is enforced.
 
 **Status:** alpha (0.1.0-alpha.10). Prisma schema and migration extraction, findings, Markdown and HTML output, and the redaction and safety tests work. An ER diagram is included, with a table filter; it has no zoom or pan yet.
 
+## Quickstart
+
+Run this inside any repository containing a `schema.prisma`:
+
+```bash
+npx github:Vrishix/schema-sage analyze .
+```
+
+This generates `artifacts/schemasage/index.html`. Open it in any browser to inspect your schema offline.
+
 ## Principles
 - Read-only. Never runs your project's code, migrations, or connects to a database.
 - Local. No account, no upload.
