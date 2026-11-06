@@ -1,7 +1,7 @@
 #!/usr/bin/env node
 
 // src/pipeline.ts
-import path4 from "node:path";
+import path5 from "node:path";
 
 // src/scanner/scan.ts
 import { promises as fs } from "node:fs";
@@ -495,8 +495,236 @@ var prismaAdapter = {
   }
 };
 
+// src/adapters/sqlalchemy/index.ts
+import { promises as fs3 } from "node:fs";
+import path3 from "node:path";
+function parsePythonModels(fileContent, filePath) {
+  const lines = fileContent.split(/\r?\n/);
+  const tables = [];
+  let currentClass = null;
+  let currentTable = null;
+  let classStartLine = 1;
+  let cols = [];
+  let rels = [];
+  const flush = () => {
+    if (currentClass && currentTable) {
+      tables.push({
+        className: currentClass,
+        tableName: currentTable,
+        file: filePath,
+        startLine: classStartLine,
+        columns: cols,
+        relationships: rels
+      });
+    }
+    currentClass = null;
+    currentTable = null;
+    cols = [];
+    rels = [];
+  };
+  for (let i = 0; i < lines.length; i++) {
+    const lineNum = i + 1;
+    const line = lines[i];
+    const classMatch = /^\s*class\s+([A-Za-z0-9_]+)\s*\([^)]*Base[^)]*\):/.exec(line);
+    if (classMatch) {
+      flush();
+      currentClass = classMatch[1];
+      classStartLine = lineNum;
+      continue;
+    }
+    if (!currentClass)
+      continue;
+    const tableMatch = /^\s*__tablename__\s*=\s*["']([^"']+)["']/.exec(line);
+    if (tableMatch) {
+      currentTable = tableMatch[1];
+      continue;
+    }
+    const colMatch = /^\s*([A-Za-z0-9_]+)\s*=\s*(?:mapped_column|Column)\s*\((.*)/.exec(line);
+    if (colMatch) {
+      const colName = colMatch[1];
+      let colDef = colMatch[2];
+      let parenCount = 1 + (colDef.match(/\(/g) || []).length - (colDef.match(/\)/g) || []).length;
+      let k = i;
+      while (parenCount > 0 && k + 1 < lines.length) {
+        k++;
+        colDef += " " + lines[k].trim();
+        parenCount += (lines[k].match(/\(/g) || []).length - (lines[k].match(/\)/g) || []).length;
+      }
+      const pk = /primary_key\s*=\s*True/i.test(colDef);
+      const unique = /unique\s*=\s*True/i.test(colDef);
+      const nullable = /nullable\s*=\s*True/i.test(colDef) || !/nullable\s*=\s*False/i.test(colDef) && !pk;
+      const typeMatch = /^[A-Za-z0-9_]+(?:\.[A-Za-z0-9_]+)?(?:\([^)]*\))?/.exec(colDef.trim());
+      let colType = typeMatch ? typeMatch[0] : "String";
+      if (colType.startsWith("Enum("))
+        colType = "Enum";
+      let foreignKey;
+      const fkMatch = /ForeignKey\s*\(\s*["']([^"']+)["']/.exec(colDef);
+      if (fkMatch) {
+        const parts = fkMatch[1].split(".");
+        if (parts.length >= 2) {
+          foreignKey = { refTable: parts[0], refColumn: parts[1] };
+        }
+      }
+      cols.push({
+        name: colName,
+        type: colType,
+        nullable,
+        pk,
+        unique,
+        foreignKey,
+        line: lineNum
+      });
+      continue;
+    }
+    const relMatch = /^\s*([A-Za-z0-9_]+)\s*=\s*relationship\s*\(\s*["']([^"']+)["']/.exec(line);
+    if (relMatch) {
+      const relName = relMatch[1];
+      const target = relMatch[2];
+      const backPopMatch = /back_populates\s*=\s*["']([^"']+)["']/.exec(line);
+      rels.push({
+        name: relName,
+        targetModel: target,
+        backPopulates: backPopMatch ? backPopMatch[1] : void 0,
+        line: lineNum
+      });
+    }
+  }
+  flush();
+  return tables;
+}
+var sqlalchemyAdapter = {
+  name: "sqlalchemy",
+  supportedFeatures: [
+    "SQLAlchemy Base models",
+    "Column / mapped_column",
+    "primary_key",
+    "unique constraints",
+    "nullable",
+    "ForeignKey (table.column)",
+    "relationship() associations"
+  ],
+  detect: (files) => {
+    return files.some(
+      (f) => f.path.endsWith(".py") && (f.path.includes("models/") || f.path.includes("models.py") || f.path.includes("alembic"))
+    );
+  },
+  async extract(repoRoot, files) {
+    const pythonFiles = files.filter(
+      (f) => f.path.endsWith(".py") && (f.path.includes("models") || f.path.includes("app/models") || f.path.includes("model"))
+    );
+    const allParsed = [];
+    for (const pf of pythonFiles) {
+      try {
+        const text = await fs3.readFile(path3.join(repoRoot, pf.path), "utf8");
+        if (text.includes("__tablename__") && (text.includes("Column(") || text.includes("mapped_column("))) {
+          const parsed = parsePythonModels(text, pf.path);
+          allParsed.push(...parsed);
+        }
+      } catch {
+      }
+    }
+    const tableByClass = /* @__PURE__ */ new Map();
+    const tableByName = /* @__PURE__ */ new Map();
+    for (const t of allParsed) {
+      tableByClass.set(t.className, t);
+      tableByName.set(t.tableName, t);
+    }
+    const tables = [];
+    const relationships = [];
+    const findings = [];
+    for (const raw of allParsed) {
+      const tid = tableId(raw.tableName);
+      const cols = raw.columns.map((c) => ({
+        id: columnId(tid, c.name),
+        name: c.name,
+        type: c.type,
+        nullable: c.nullable,
+        default: null,
+        isPrimaryKey: c.pk,
+        isUnique: c.unique,
+        status: "verified",
+        evidence: [{ file: raw.file, lines: [c.line, c.line] }]
+      }));
+      tables.push({
+        id: tid,
+        name: raw.tableName,
+        dbName: raw.tableName,
+        explanation: null,
+        status: "verified",
+        evidence: [{ file: raw.file, lines: [raw.startLine, raw.startLine] }],
+        columns: cols
+      });
+      for (const col of raw.columns) {
+        if (col.foreignKey) {
+          const fromColId = columnId(tid, col.name);
+          const toTid = tableId(col.foreignKey.refTable);
+          const toColId = columnId(toTid, col.foreignKey.refColumn);
+          const relId = relationshipId(fromColId, toColId);
+          relationships.push({
+            id: relId,
+            from: fromColId,
+            to: toColId,
+            cardinality: col.unique ? "one-to-one" : "one-to-many",
+            enforcement: "db-enforced",
+            status: "verified",
+            evidence: [{ file: raw.file, lines: [col.line, col.line] }]
+          });
+        }
+      }
+      for (const rel of raw.relationships) {
+        const target = tableByClass.get(rel.targetModel);
+        if (target) {
+          const fromColId = columnId(tid, "id");
+          const toColId = columnId(tableId(target.tableName), "id");
+          const relId = relationshipId(fromColId, toColId);
+          if (!relationships.some((r) => r.id === relId)) {
+            relationships.push({
+              id: relId,
+              from: fromColId,
+              to: toColId,
+              cardinality: "one-to-many",
+              enforcement: "orm-declared",
+              status: "verified",
+              evidence: [{ file: raw.file, lines: [rel.line, rel.line] }]
+            });
+          }
+        }
+      }
+      if (!raw.columns.some((c) => c.pk)) {
+        findings.push({
+          id: `finding:no-primary-key:${raw.tableName}`,
+          category: "table-without-primary-key",
+          severity: "suggestion",
+          explanation: `${raw.tableName} has no primary key column defined.`,
+          recommendation: `Consider adding primary_key=True to ${raw.tableName}.`,
+          status: "verified",
+          evidence: [{ file: raw.file, lines: [raw.startLine, raw.startLine] }]
+        });
+      }
+    }
+    return {
+      schemaVersion: "0",
+      tool: { name: "schemasage", version: TOOL_VERSION },
+      generatedAt: (/* @__PURE__ */ new Date()).toISOString(),
+      source: {
+        adapter: "sqlalchemy",
+        adapterVersion: TOOL_VERSION,
+        files: pythonFiles.map((f) => f.path)
+      },
+      tables,
+      relationships,
+      findings,
+      coverage: {
+        filesScanned: pythonFiles.map((f) => f.path),
+        unsupported: [],
+        skipped: []
+      }
+    };
+  }
+};
+
 // src/adapters/index.ts
-var adapters = [prismaAdapter];
+var adapters = [prismaAdapter, sqlalchemyAdapter];
 
 // src/redaction/patterns.ts
 var RULES = [
@@ -574,20 +802,20 @@ function validateModel(model) {
 }
 
 // src/generator/output.ts
-import { promises as fs3 } from "node:fs";
-import path3 from "node:path";
+import { promises as fs4 } from "node:fs";
+import path4 from "node:path";
 import { createHash } from "node:crypto";
 var OUTPUT_DIR = "artifacts/schemasage";
 async function writeOutput(repoRoot, files) {
-  const base = path3.resolve(repoRoot, OUTPUT_DIR);
+  const base = path4.resolve(repoRoot, OUTPUT_DIR);
   const manifest = [];
   for (const [rel, content] of Object.entries(files)) {
-    const target = path3.resolve(base, rel);
-    if (!target.startsWith(base + path3.sep)) {
+    const target = path4.resolve(base, rel);
+    if (!target.startsWith(base + path4.sep)) {
       throw new Error(`Refusing to write outside output directory: ${rel}`);
     }
-    await fs3.mkdir(path3.dirname(target), { recursive: true });
-    await fs3.writeFile(target, content, "utf8");
+    await fs4.mkdir(path4.dirname(target), { recursive: true });
+    await fs4.writeFile(target, content, "utf8");
     manifest.push({ path: rel, sha256: createHash("sha256").update(content).digest("hex") });
   }
   return manifest;
@@ -923,7 +1151,7 @@ var WRITE = /* @__PURE__ */ new Set(["create", "createMany", "createManyAndRetur
 var DELETE = /* @__PURE__ */ new Set(["delete", "deleteMany"]);
 var RAW = /* @__PURE__ */ new Set(["$queryRaw", "$queryRawUnsafe", "$executeRaw", "$executeRawUnsafe"]);
 var DEFAULT_RECEIVERS = ["prisma", "db"];
-var kindFor = (path5) => path5.endsWith(".tsx") ? ts.ScriptKind.TSX : path5.endsWith(".jsx") ? ts.ScriptKind.JSX : path5.endsWith(".js") || path5.endsWith(".mjs") || path5.endsWith(".cjs") ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+var kindFor = (path6) => path6.endsWith(".tsx") ? ts.ScriptKind.TSX : path6.endsWith(".jsx") ? ts.ScriptKind.JSX : path6.endsWith(".js") || path6.endsWith(".mjs") || path6.endsWith(".cjs") ? ts.ScriptKind.JS : ts.ScriptKind.TS;
 var lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 function enclosingFunction(node) {
   let cur = node.parent;
@@ -965,7 +1193,7 @@ function scanUsage(files, modelNames) {
       receivers.add(n);
   const usages = [];
   const rawSql = [];
-  for (const { path: path5, sf } of parsed) {
+  for (const { path: path6, sf } of parsed) {
     const visit = (node) => {
       if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
         const method = node.expression.name.text;
@@ -977,24 +1205,24 @@ function scanUsage(files, modelNames) {
           const op = READ.has(method) ? "read" : WRITE.has(method) ? "write" : DELETE.has(method) ? "delete" : null;
           const model = byCamel.get(modelKey);
           if (recv && receivers.has(recv) && model && op) {
-            usages.push({ table: model, operation: op, method, file: path5, line, fn: enclosingFunction(node) });
+            usages.push({ table: model, operation: op, method, file: path6, line, fn: enclosingFunction(node) });
           }
         }
         const recvRaw = receiverName(node.expression.expression);
         if (recvRaw && receivers.has(recvRaw) && RAW.has(method)) {
-          rawSql.push({ file: path5, line, method });
+          rawSql.push({ file: path6, line, method });
         }
       }
       ts.forEachChild(node, visit);
     };
     visit(sf);
   }
-  for (const { path: path5, sf } of parsed) {
+  for (const { path: path6, sf } of parsed) {
     const visit = (node) => {
       if (ts.isTaggedTemplateExpression(node) && ts.isPropertyAccessExpression(node.tag)) {
         const recv = receiverName(node.tag.expression);
         if (recv && receivers.has(recv) && RAW.has(node.tag.name.text)) {
-          rawSql.push({ file: path5, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, method: node.tag.name.text });
+          rawSql.push({ file: path6, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, method: node.tag.name.text });
         }
       }
       ts.forEachChild(node, visit);
@@ -1009,7 +1237,7 @@ import ts2 from "typescript";
 var HTTP = /* @__PURE__ */ new Set(["get", "post", "put", "patch", "delete"]);
 var NEXT_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 var MAX_DEPTH = 5;
-var kindFor2 = (path5) => path5.endsWith(".tsx") ? ts2.ScriptKind.TSX : path5.endsWith(".jsx") ? ts2.ScriptKind.JSX : path5.endsWith(".js") || path5.endsWith(".mjs") || path5.endsWith(".cjs") ? ts2.ScriptKind.JS : ts2.ScriptKind.TS;
+var kindFor2 = (path6) => path6.endsWith(".tsx") ? ts2.ScriptKind.TSX : path6.endsWith(".jsx") ? ts2.ScriptKind.JSX : path6.endsWith(".js") || path6.endsWith(".mjs") || path6.endsWith(".cjs") ? ts2.ScriptKind.JS : ts2.ScriptKind.TS;
 function nextPagesApiFromFile(file) {
   const m = /(?:^|\/)pages\/(api\/.*)\.(ts|tsx|js|jsx|mjs)$/.exec(file);
   if (!m)
@@ -1163,11 +1391,11 @@ function buildFlows(files, usages) {
 }
 
 // src/pipeline.ts
-import { promises as fs4 } from "node:fs";
+import { promises as fs5 } from "node:fs";
 var CODE_EXT = /\.(ts|tsx|js|jsx|mjs|cjs)$/;
 var MAX_SOURCE_BYTES = 1e6;
 async function analyzeRepo(target, opts = {}) {
-  const repoRoot = path4.resolve(target);
+  const repoRoot = path5.resolve(target);
   const log = [];
   const scan = await scanRepo(repoRoot);
   log.push(`Scanned ${scan.files.length} files`);
@@ -1183,7 +1411,7 @@ async function analyzeRepo(target, opts = {}) {
     for (const f of scan.files) {
       if (!CODE_EXT.test(f.path) || f.path.endsWith(".d.ts") || f.size > MAX_SOURCE_BYTES)
         continue;
-      sources.push({ path: f.path, text: await fs4.readFile(path4.join(repoRoot, f.path), "utf8") });
+      sources.push({ path: f.path, text: await fs5.readFile(path5.join(repoRoot, f.path), "utf8") });
     }
     const usage = scanUsage(sources, model.tables.map((t) => t.name));
     const { endpoints, flows } = buildFlows(sources, usage.usages);
