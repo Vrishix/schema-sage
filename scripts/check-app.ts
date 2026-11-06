@@ -1,0 +1,12 @@
+import { promises as fs } from "node:fs";
+import path from "node:path";
+import { analyzeRepo } from "../src/pipeline.js";
+const repo = process.argv[2];
+const t0 = Date.now();
+const m = (await analyzeRepo(repo, { write: false })).model!;
+const a = m.application!;
+console.log(`ms=${Date.now() - t0} usages=${a.usages.length} rawSql=${a.rawSql.length} endpoints=${a.endpoints.length} flows=${a.flows.length}`);
+const byTable: Record<string, number> = {};
+for (const u of a.usages) byTable[u.table] = (byTable[u.table] ?? 0) + 1;
+console.log("top tables:", Object.entries(byTable).sort((x, y) => y[1] - x[1]).slice(0, 6).map(([k, v]) => `${k}=${v}`).join(" "));
+for (const f of a.flows.slice(0, 4)) console.log(`FLOW ${f.endpoint.method} ${f.endpoint.path} [${f.endpoint.file}] chain=${f.chain.length} ops=${f.operations.map((o) => o.operation + " " + o.table).slice(0, 3).join(", ")}`);

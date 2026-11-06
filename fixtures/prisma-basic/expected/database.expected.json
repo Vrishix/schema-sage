@@ -1,0 +1,51 @@
+{
+  "_note": "Hand-written answer key. Written before any extraction code. The test compares tool output to this file, ignoring timestamps.",
+  "tables": {
+    "User": {
+      "columns": {
+        "id": { "type": "Int", "nullable": false, "isPrimaryKey": true },
+        "email": { "type": "String", "nullable": false, "isPrimaryKey": false, "unique": true },
+        "name": { "type": "String", "nullable": true, "isPrimaryKey": false }
+      }
+    },
+    "TutorProfile": {
+      "columns": {
+        "id": { "type": "Int", "nullable": false, "isPrimaryKey": true },
+        "bio": { "type": "String", "nullable": true, "isPrimaryKey": false },
+        "userId": { "type": "Int", "nullable": false, "isPrimaryKey": false, "unique": true }
+      }
+    },
+    "Booking": {
+      "columns": {
+        "id": { "type": "Int", "nullable": false, "isPrimaryKey": true },
+        "startsAt": { "type": "DateTime", "nullable": false, "isPrimaryKey": false },
+        "userId": { "type": "Int", "nullable": false, "isPrimaryKey": false },
+        "tutorId": { "type": "Int", "nullable": false, "isPrimaryKey": false }
+      }
+    },
+    "Review": {
+      "columns": {
+        "id": { "type": "Int", "nullable": false, "isPrimaryKey": true },
+        "rating": { "type": "Int", "nullable": false, "isPrimaryKey": false },
+        "bookingId": { "type": "Int", "nullable": false, "isPrimaryKey": false, "unique": true },
+        "authorId": { "type": "Int", "nullable": false, "isPrimaryKey": false }
+      }
+    }
+  },
+  "relationships": [
+    { "from": "Booking.userId", "to": "User.id", "cardinality": "one-to-many", "enforcement": "db-enforced" },
+    { "from": "Booking.tutorId", "to": "TutorProfile.id", "cardinality": "one-to-many", "enforcement": "db-enforced" },
+    { "from": "TutorProfile.userId", "to": "User.id", "cardinality": "one-to-one", "enforcement": "db-enforced" },
+    { "from": "Review.bookingId", "to": "Booking.id", "cardinality": "one-to-one", "enforcement": "db-enforced" },
+    { "from": "Review.authorId", "to": "User.id", "cardinality": "one-to-many", "enforcement": "db-enforced" }
+  ],
+  "findings": [
+    { "category": "foreign-key-without-index", "column": "Booking.userId", "severity": "suggestion" },
+    { "category": "foreign-key-without-index", "column": "Booking.tutorId", "severity": "suggestion" },
+    { "category": "foreign-key-without-index", "column": "Review.authorId", "severity": "suggestion" }
+  ],
+  "coverage": {
+    "filesScanned": ["prisma/schema.prisma", "prisma/migrations/0001_init/migration.sql"],
+    "skipped": []
+  }
+}

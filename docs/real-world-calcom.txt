@@ -1,0 +1,21 @@
+ms=1161 tables=102 rels=175 findings=156
+db-enforced=127 orm-declared=48
+files read=596
+7	constraint type "…" not analysed
+4	statement "…" not replayed
+1	composite foreign key; relationship drawn from userId only
+1	ALTER TABLE rename not replayed
+1	could not parse SQL (Syntax error at line 11 col 5:)
+1	could not parse SQL (💀 Ambiguous SQL syntax: Please file an issue stating the request that has fail
+1	index Team_slug_parentId_key_null uses an expression; not analysed
+1	index users_username_organizationId_key_null uses an expression; not analysed
+1	index RoutingFormResponseField_valueString_idx uses an expression; not analysed
+1	index RoutingFormResponseDenormalized_bookingAssignmentReason_idx uses an expression; not analysed
+1	could not parse SQL (Syntax error at line 121 col 16:)
+1	could not parse SQL (Syntax error at line 132 col 16:)
+findings by category: {"nullable-foreign-key":99,"foreign-key-without-index":52,"table-without-primary-key":5}
+
+
+Source: calcom/cal.com, packages/prisma (schema.prisma + 595 migrations), shallow clone on 2026-11-02.
+Manual checks on 3 sampled "foreign-key-without-index" findings (TravelSchedule.userId, User.organizationId, Team.createdByOAuthClientId): confirmed no matching index statement in migrations or schema.
+Known noise: 99 "nullable-foreign-key" findings are accurate but may be too many to be useful on their own.

@@ -1,0 +1,41 @@
+{
+  "name": "schemasage",
+  "version": "0.1.0-alpha.10",
+  "description": "Explains your database from code and migrations: an offline ER diagram with evidence links.",
+  "license": "MIT",
+  "type": "module",
+  "bin": {
+    "schemasage": "./dist/cli.js"
+  },
+  "engines": {
+    "node": ">=20"
+  },
+  "scripts": {
+    "analyze": "tsx src/cli.ts analyze",
+    "test": "vitest run",
+    "typecheck": "tsc --noEmit",
+    "build": "esbuild src/cli.ts --bundle --platform=node --format=esm --packages=external --outfile=dist/cli.js",
+    "prepublishOnly": "npm test && npm run build",
+    "examples": "tsx scripts/examples-harness.ts",
+    "check-repo": "tsx scripts/check-repo.ts",
+    "check-app": "tsx scripts/check-app.ts"
+  },
+  "devDependencies": {
+    "@types/node": "^20.11.0",
+    "esbuild": "^0.20.2",
+    "tsx": "^4.7.0",
+    "vitest": "^1.6.0"
+  },
+  "files": [
+    "dist",
+    "SKILL.md",
+    "README.md",
+    "LICENSE"
+  ],
+  "dependencies": {
+    "@mrleebo/prisma-ast": "^0.12.1",
+    "@prisma/internals": "^7.10.1",
+    "pgsql-ast-parser": "^12.0.2",
+    "typescript": "5.4"
+  }
+}

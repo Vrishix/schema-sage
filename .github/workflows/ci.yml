@@ -1,0 +1,26 @@
+name: CI
+on:
+  push:
+  pull_request:
+jobs:
+  test:
+    runs-on: ubuntu-latest
+    strategy:
+      matrix:
+        node: [20, 22]
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: ${{ matrix.node }}
+          cache: npm
+      - run: npm ci
+      - run: npm run typecheck
+      - run: npm test
+      - run: npm run build
+      - name: Smoke test the CLI on the fixture
+        run: |
+          rm -rf /tmp/smoke && mkdir /tmp/smoke && cp -r fixtures/prisma-basic/prisma /tmp/smoke/
+          node dist/cli.js analyze /tmp/smoke
+          test -f /tmp/smoke/artifacts/schemasage/index.html
+          test -f /tmp/smoke/artifacts/schemasage/manifest.json
