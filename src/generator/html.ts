@@ -3,7 +3,7 @@ import { erdSvg, ERD_CSS } from "./erd.js";
 import { esc } from "./escape.js";
 import { createHash } from "node:crypto";
 
-/** Filter, interactive diagram, pan/zoom, detail modal, collapsible sidebar, and learning guide script. */
+/** Filter, interactive diagram, pan/zoom, detail modal, collapsible sidebar, and Archify-style relationship inspection tooltip. */
 export const FILTER_SCRIPT = `(function(){
   // 1. Search & Filter across table cards, ERD entities, and Sidebar links
   var filterInput = document.getElementById("filter");
@@ -41,7 +41,6 @@ export const FILTER_SCRIPT = `(function(){
   // 2. Sidebar Toggle (ChatGPT style slide out / in)
   var sidebar = document.getElementById("sidebar");
   var toggleBtn = document.getElementById("sidebar-toggle");
-  var overlay = document.getElementById("sidebar-overlay");
 
   function toggleSidebar() {
     if(!sidebar) return;
@@ -50,7 +49,6 @@ export const FILTER_SCRIPT = `(function(){
   }
 
   if(toggleBtn) toggleBtn.onclick = toggleSidebar;
-  if(overlay) overlay.onclick = toggleSidebar;
 
   // 3. Pan and Zoom controls for ERD
   var currentScale = 1;
@@ -88,7 +86,7 @@ export const FILTER_SCRIPT = `(function(){
 
   if(wrap && canvas) {
     wrap.addEventListener("mousedown", function(e) {
-      if(e.target.closest("a") || e.target.closest(".entity")) return;
+      if(e.target.closest(".edge-group") || e.target.closest(".entity")) return;
       isPanning = true;
       startX = e.clientX - panX;
       startY = e.clientY - panY;
@@ -113,7 +111,102 @@ export const FILTER_SCRIPT = `(function(){
     });
   }
 
-  // 4. Highlight connections on entity hover & click to jump
+  // 4. Archify-Style Relationship Inspector Tooltip
+  var tooltip = document.getElementById("rel-tooltip");
+
+  function showRelTooltip(e, fromT, toT, fromC, toC, card, enf, src) {
+    if(!tooltip) return;
+    var badgeClass = enf === "db-enforced" ? "db-enforced" : "orm-declared";
+    var enfText = enf === "db-enforced" ? "Database Enforced (Foreign Key)" : "ORM Declared (Application Virtual)";
+    
+    tooltip.innerHTML = 
+      '<div class="tt-header">' +
+        '<span class="tt-title">Relationship Link</span>' +
+        '<span class="tt-badge ' + badgeClass + '">' + card + '</span>' +
+      '</div>' +
+      '<div class="tt-body">' +
+        '<div class="tt-flow">' +
+          '<div class="tt-endpoint">' +
+            '<span class="tt-table">' + fromT + '</span>' +
+            '<span class="tt-col">.' + fromC + '</span>' +
+          '</div>' +
+          '<div class="tt-arrow">→</div>' +
+          '<div class="tt-endpoint">' +
+            '<span class="tt-table">' + toT + '</span>' +
+            '<span class="tt-col">.' + toC + '</span>' +
+          '</div>' +
+        '</div>' +
+        '<div class="tt-meta">' +
+          '<div class="tt-meta-item"><strong>Enforcement:</strong> <span class="' + badgeClass + '">' + enfText + '</span></div>' +
+          (src ? '<div class="tt-meta-item"><strong>Source:</strong> <code>' + src + '</code></div>' : '') +
+        '</div>' +
+      '</div>';
+
+    tooltip.style.display = "block";
+    updateTooltipPos(e);
+  }
+
+  function updateTooltipPos(e) {
+    if(!tooltip || tooltip.style.display !== "block") return;
+    var x = e.clientX + 16;
+    var y = e.clientY + 16;
+    var w = tooltip.offsetWidth || 300;
+    var h = tooltip.offsetHeight || 160;
+    if(x + w > window.innerWidth - 20) x = e.clientX - w - 16;
+    if(y + h > window.innerHeight - 20) y = e.clientY - h - 16;
+    tooltip.style.left = x + "px";
+    tooltip.style.top = y + "px";
+  }
+
+  function hideRelTooltip() {
+    if(tooltip) tooltip.style.display = "none";
+  }
+
+  document.querySelectorAll(".edge-group").forEach(function(group) {
+    group.addEventListener("mouseenter", function(e) {
+      var fromT = group.getAttribute("data-from") || "";
+      var toT = group.getAttribute("data-to") || "";
+      var fromC = group.getAttribute("data-from-col") || "";
+      var toC = group.getAttribute("data-to-col") || "";
+      var card = group.getAttribute("data-card") || "";
+      var enf = group.getAttribute("data-enf") || "";
+      var src = group.getAttribute("data-src") || "";
+
+      document.querySelectorAll(".edge").forEach(function(edge) {
+        edge.style.opacity = "0.1";
+      });
+      var edgeEl = group.querySelector(".edge");
+      if(edgeEl) {
+        edgeEl.style.opacity = "1";
+        edgeEl.style.strokeWidth = "4";
+      }
+      showRelTooltip(e, fromT, toT, fromC, toC, card, enf, src);
+    });
+
+    group.addEventListener("mousemove", function(e) {
+      updateTooltipPos(e);
+    });
+
+    group.addEventListener("mouseleave", function() {
+      document.querySelectorAll(".edge").forEach(function(edge) {
+        edge.style.strokeWidth = "";
+        edge.style.opacity = "1";
+      });
+      hideRelTooltip();
+    });
+
+    group.addEventListener("click", function() {
+      var relIdx = group.getAttribute("data-rel");
+      var target = document.getElementById("rel-" + relIdx);
+      if(target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.classList.add("highlight-flash");
+        setTimeout(function(){ target.classList.remove("highlight-flash"); }, 2000);
+      }
+    });
+  });
+
+  // 5. Highlight connections on entity hover & click to jump
   document.querySelectorAll("g.entity").forEach(function(el) {
     var tableName = el.getAttribute("data-name");
     el.addEventListener("mouseenter", function() {
@@ -140,7 +233,7 @@ export const FILTER_SCRIPT = `(function(){
     });
   });
 
-  // 5. Jump to Table Card with visual flash
+  // 6. Jump to Table Card with visual flash
   window.jumpToTable = function(tableName) {
     var target = document.getElementById(tableName);
     if(target) {
@@ -161,7 +254,7 @@ export const FILTER_SCRIPT = `(function(){
     });
   });
 
-  // 6. Diagram View Mode Switcher (Visual Canvas vs Mermaid Code)
+  // 7. Diagram View Mode Switcher (Visual Canvas vs Mermaid Code)
   var tabVisual = document.getElementById("tab-visual");
   var tabMermaid = document.getElementById("tab-mermaid");
   var viewVisual = document.getElementById("view-visual");
@@ -182,7 +275,7 @@ export const FILTER_SCRIPT = `(function(){
     };
   }
 
-  // 7. Copy Mermaid Code
+  // 8. Copy Mermaid Code
   var copyBtn = document.getElementById("btn-copy-mermaid");
   if(copyBtn) {
     copyBtn.onclick = function() {
@@ -395,7 +488,7 @@ body {
   display: flex;
 }
 
-/* Sidebar (ChatGPT style) */
+/* Sidebar */
 #sidebar {
   width: var(--sidebar-w);
   height: 100vh;
@@ -781,6 +874,106 @@ main {
   z-index: 10;
 }
 
+/* Archify-Style Floating Tooltip */
+#rel-tooltip {
+  display: none;
+  position: fixed;
+  z-index: 2000;
+  pointer-events: none;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
+  border-radius: 12px;
+  padding: 14px 18px;
+  width: 310px;
+  max-width: 90vw;
+  backdrop-filter: blur(12px);
+  animation: popIn 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+}
+
+@keyframes popIn {
+  from { opacity: 0; transform: scale(0.96) translateY(4px); }
+  to { opacity: 1; transform: scale(1) translateY(0); }
+}
+
+.tt-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  border-bottom: 1px solid var(--line);
+  padding-bottom: 8px;
+  margin-bottom: 10px;
+}
+
+.tt-title {
+  font-size: 12px;
+  font-weight: 700;
+  color: var(--muted);
+  text-transform: uppercase;
+  letter-spacing: 0.5px;
+}
+
+.tt-badge {
+  font-size: 11px;
+  font-weight: 700;
+  padding: 2px 7px;
+  border-radius: 6px;
+}
+
+.tt-badge.db-enforced {
+  background: rgba(13, 148, 136, 0.14);
+  color: var(--solid);
+}
+
+.tt-badge.orm-declared {
+  background: rgba(217, 119, 6, 0.14);
+  color: var(--dash);
+}
+
+.tt-flow {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  background: var(--card-head);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 8px 12px;
+  margin-bottom: 10px;
+}
+
+.tt-endpoint {
+  display: flex;
+  flex-direction: column;
+}
+
+.tt-table {
+  font-weight: 700;
+  font-size: 13px;
+}
+
+.tt-col {
+  font-family: var(--mono);
+  font-size: 11px;
+  color: var(--accent);
+}
+
+.tt-arrow {
+  color: var(--muted);
+  font-size: 15px;
+}
+
+.tt-meta {
+  font-size: 12px;
+  color: var(--muted);
+  display: flex;
+  flex-direction: column;
+  gap: 4px;
+}
+
+.tt-meta-item strong {
+  color: var(--fg);
+}
+
 .mermaid-container {
   display: none;
   background: var(--card-bg);
@@ -1099,8 +1292,8 @@ ${ERD_CSS}
           <p><span class="enforcement-badge db-enforced">Solid Line</span> = Enforced by DB Foreign Keys. <span class="enforcement-badge orm-declared">Dashed Line</span> = Declared at ORM level only.</p>
         </div>
         <div class="guide-item">
-          <strong>2. Instant Sidebar Navigation</strong>
-          <p>Use the left sidebar (<strong>☰</strong>) to filter and click directly to any table card, avoiding endless scrolling.</p>
+          <strong>2. Archify-Style Inspector Tooltip</strong>
+          <p>Hover over any relationship line or connection dot to inspect precise table/column linkages, cardinality, and source line numbers.</p>
         </div>
         <div class="guide-item">
           <strong>3. Export to Mermaid &amp; Docs</strong>
@@ -1146,8 +1339,11 @@ ${ERD_CSS}
 
     <div id="view-visual" class="erd-wrap">
       ${erdSvg(m)}
-      <div class="erd-hint">Click &amp; drag canvas to pan &bull; Hover table to trace relations &bull; Click to view table card</div>
+      <div class="erd-hint">Click &amp; drag canvas to pan &bull; Hover lines to inspect relationships &bull; Click to view table card</div>
     </div>
+
+    <!-- Archify-style Floating Relationship Inspector Tooltip -->
+    <div id="rel-tooltip"></div>
 
     <div id="view-mermaid" class="mermaid-container">
       <div class="mermaid-header">

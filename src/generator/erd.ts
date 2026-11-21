@@ -147,7 +147,11 @@ export function erdSvg(model: DatabaseModel): string {
     const by = colY(b, toC);
     const label = rel.cardinality === "one-to-one" ? "1:1" : rel.cardinality === "many-to-many" ? "N:N" : "1:N";
     const dash = rel.enforcement === "orm-declared" ? 'stroke-dasharray="5 4"' : "";
-    const common = `class="edge ${rel.enforcement}" ${dash} data-from="${esc(fromT)}" data-to="${esc(toT)}"`;
+    const evidenceFile = rel.evidence[0]?.file ?? "";
+    const evidenceLine = rel.evidence[0]?.lines?.[0] ?? "";
+    const evidenceStr = evidenceFile ? `${evidenceFile}:${evidenceLine}` : "";
+
+    const common = `class="edge ${rel.enforcement}" ${dash} data-from="${esc(fromT)}" data-to="${esc(toT)}" data-rel-id="${idx}" data-from-col="${esc(fromC)}" data-to-col="${esc(toC)}" data-card="${esc(rel.cardinality)}" data-enf="${esc(rel.enforcement)}" data-src="${esc(evidenceStr)}"`;
 
     let d: string;
     let mx: number;
@@ -178,7 +182,7 @@ export function erdSvg(model: DatabaseModel): string {
       my = (ay + by) / 2;
     }
     parts.push(
-      `<g class="edge-group" data-rel="${idx}">` +
+      `<g class="edge-group" data-rel="${idx}" data-from="${esc(fromT)}" data-to="${esc(toT)}" data-from-col="${esc(fromC)}" data-to-col="${esc(toC)}" data-card="${esc(rel.cardinality)}" data-enf="${esc(rel.enforcement)}" data-src="${esc(evidenceStr)}">` +
         `<a href="#rel-${idx}" aria-label="${esc(rel.from)} to ${esc(rel.to)}, ${esc(rel.enforcement)}">` +
         `<path d="${d}" ${common} fill="none"/>` +
         `<circle cx="${mx}" cy="${my}" r="11" class="edge-bubble"/>` +
@@ -223,12 +227,14 @@ export function erdSvg(model: DatabaseModel): string {
 export const ERD_CSS = `
 .erd-wrap {
   position: relative;
-  overflow: auto;
-  max-height: 80vh;
+  overflow: hidden;
+  max-height: 82vh;
+  min-height: 520px;
   border: 1px solid var(--card-border);
   border-radius: 16px;
   background: var(--canvas-bg);
   padding: 16px;
+  cursor: grab;
   box-shadow: inset 0 2px 6px rgba(0,0,0,0.02);
 }
 .erd-canvas {
@@ -302,6 +308,7 @@ export const ERD_CSS = `
 }
 .erd-wrap .edge {
   stroke-width: 1.8;
+  cursor: pointer;
   transition: stroke 0.2s, stroke-width 0.2s, opacity 0.2s;
 }
 .erd-wrap .edge.db-enforced {
@@ -322,8 +329,11 @@ export const ERD_CSS = `
   stroke-width: 2.2;
   box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
 }
+.erd-wrap .edge-group {
+  cursor: pointer;
+}
 .erd-wrap .edge-group:hover .edge {
   stroke: var(--accent-hover);
-  stroke-width: 3.5;
+  stroke-width: 4;
 }
 `;
