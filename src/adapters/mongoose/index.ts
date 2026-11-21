@@ -1,148 +1,336 @@
 import { promises as fs } from "node:fs";
 import path from "node:path";
+import ts from "typescript";
 import type { DatabaseAdapter } from "../types.js";
 import type { ScannedFile } from "../../scanner/scan.js";
-import type { DatabaseModel, Table, Column, Relationship, Finding } from "../../model/types.js";
+import type { DatabaseModel, Table, Column, Relationship } from "../../model/types.js";
 import { tableId, columnId, relationshipId } from "../../model/ids.js";
 import { TOOL_VERSION } from "../../version.js";
 
-interface MongooseProp {
+interface ExtractedField {
   name: string;
   type: string;
-  required?: boolean;
-  unique?: boolean;
+  required: boolean;
+  unique: boolean;
   ref?: string;
   line: number;
 }
 
-interface MongooseModel {
-  name: string;
-  collection: string;
+interface ExtractedSchema {
+  modelName: string;
+  collectionName: string;
   file: string;
   line: number;
-  properties: MongooseProp[];
+  fields: ExtractedField[];
 }
 
-export function parseMongooseSchemas(fileContent: string, filePath: string): MongooseModel[] {
-  const models: MongooseModel[] = [];
-  const lines = fileContent.split(/\r?\n/);
+function cleanTypeName(t: string): string {
+  return t
+    .replace(/^(?:mongoose\.)?(?:Schema\.)?(?:Types\.)?/, "")
+    .replace(/^String$/i, "string")
+    .replace(/^Number$/i, "number")
+    .replace(/^Boolean$/i, "boolean")
+    .replace(/^Date$/i, "Date")
+    .replace(/^ObjectId$/i, "ObjectId");
+}
 
-  // Look for mongoose.model("User", UserSchema) or model("User", ...)
-  // and Schema definitions
-  const schemaRegex = /(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=\s*(?:new\s+)?(?:mongoose\.)?Schema\s*\(\s*\{([\s\S]*?)\}\s*(?:,\s*\{([\s\S]*?)\})?\s*\)/g;
-  
-  let match: RegExpExecArray | null;
-  while ((match = schemaRegex.exec(fileContent)) !== null) {
-    const schemaVarName = match[1];
-    const schemaBody = match[2];
-    const schemaOptions = match[3] || "";
-    
-    // Find model registration e.g. mongoose.model("User", UserSchema)
-    const modelRegRegex = new RegExp(`(?:mongoose\\.)?model\\s*\\(\\s*["']([^"']+)["']\\s*,\\s*${schemaVarName}`, "i");
-    const modelRegMatch = modelRegRegex.exec(fileContent);
-    const modelName = modelRegMatch ? modelRegMatch[1] : schemaVarName.replace(/Schema$/i, "");
-    
-    // Find custom collection name if specified in options: { collection: 'users' }
-    const collMatch = /collection\s*:\s*["']([^"']+)["']/i.exec(schemaOptions);
-    const collectionName = collMatch ? collMatch[1] : modelName.toLowerCase() + "s";
+/**
+ * Robust TypeScript AST-based parser for Mongoose schemas and models.
+ * Handles:
+ * - new Schema({ ... })
+ * - new mongoose.Schema<IUser>({ ... })
+ * - Schema({ ... })
+ * - mongoose.model("User", UserSchema)
+ * - model<IUser>("User", ...)
+ * - Typegoose: @prop() class User ...
+ * - export default model(...)
+ */
+export function parseMongooseAST(sourceText: string, filePath: string): ExtractedSchema[] {
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
 
-    // Calculate approximate line
-    const matchIndex = match.index;
-    const lineNum = fileContent.substring(0, matchIndex).split("\n").length;
+  const schemas: ExtractedSchema[] = [];
+  const schemaVarToFields = new Map<string, { line: number; fields: ExtractedField[] }>();
+  const schemaVarToModelName = new Map<string, string>();
 
-    const props: MongooseProp[] = [
+  function getLineNumber(pos: number): number {
+    return sourceFile.getLineAndCharacterOfPosition(pos).line + 1;
+  }
+
+  function extractFieldsFromObjectLiteral(objLiteral: ts.ObjectLiteralExpression): ExtractedField[] {
+    const fields: ExtractedField[] = [
       {
         name: "_id",
         type: "ObjectId",
         required: true,
         unique: true,
-        line: lineNum,
-      }
+        line: getLineNumber(objLiteral.pos),
+      },
     ];
 
-    // Parse simple fields in schemaBody line-by-line
-    const bodyLines = schemaBody.split("\n");
-    for (let i = 0; i < bodyLines.length; i++) {
-      const bLine = bodyLines[i].trim();
-      const simpleFieldMatch = /^([A-Za-z0-9_]+)\s*:\s*(?:\{([^}]*)\}|([A-Za-z0-9_.[\]]+))/.exec(bLine);
-      if (simpleFieldMatch) {
-        const fieldName = simpleFieldMatch[1];
-        if (fieldName === "_id") continue;
-        const fieldObj = simpleFieldMatch[2];
-        const directType = simpleFieldMatch[3];
+    for (const prop of objLiteral.properties) {
+      if (!ts.isPropertyAssignment(prop)) continue;
+      const fieldName = prop.name.getText(sourceFile).replace(/['"]/g, "");
+      if (fieldName === "_id") continue;
 
-        let typeStr = directType || "Mixed";
-        let isRequired = false;
-        let isUnique = false;
-        let refTarget: string | undefined;
+      let typeStr = "Mixed";
+      let isRequired = false;
+      let isUnique = false;
+      let refTarget: string | undefined;
 
-        if (fieldObj) {
-          const typeMatch = /type\s*:\s*([A-Za-z0-9_.[\]]+)/.exec(fieldObj);
-          if (typeMatch) typeStr = typeMatch[1];
-          isRequired = /required\s*:\s*true/i.test(fieldObj);
-          isUnique = /unique\s*:\s*true/i.test(fieldObj);
-          const refMatch = /ref\s*:\s*["']([^"']+)["']/.exec(fieldObj);
-          if (refMatch) refTarget = refMatch[1];
+      const init = prop.initializer;
+      const line = getLineNumber(prop.pos);
+
+      // 1. Shorthand: `name: String` or `name: [String]` or `name: mongoose.Types.ObjectId`
+      if (ts.isIdentifier(init) || ts.isPropertyAccessExpression(init)) {
+        typeStr = cleanTypeName(init.getText(sourceFile));
+      } else if (ts.isArrayLiteralExpression(init)) {
+        // e.g. tags: [String] or authors: [{ type: ObjectId, ref: 'User' }]
+        if (init.elements.length > 0) {
+          const firstElem = init.elements[0];
+          if (ts.isObjectLiteralExpression(firstElem)) {
+            for (const subProp of firstElem.properties) {
+              if (ts.isPropertyAssignment(subProp)) {
+                const subKey = subProp.name.getText(sourceFile).replace(/['"]/g, "");
+                if (subKey === "type") typeStr = cleanTypeName(subProp.initializer.getText(sourceFile)) + "[]";
+                if (subKey === "ref") refTarget = subProp.initializer.getText(sourceFile).replace(/['"]/g, "");
+              }
+            }
+          } else {
+            typeStr = cleanTypeName(firstElem.getText(sourceFile)) + "[]";
+          }
+        } else {
+          typeStr = "Array";
         }
+      } else if (ts.isObjectLiteralExpression(init)) {
+        // 2. Full object: `name: { type: String, required: true, ref: '...' }`
+        for (const subProp of init.properties) {
+          if (!ts.isPropertyAssignment(subProp)) continue;
+          const subKey = subProp.name.getText(sourceFile).replace(/['"]/g, "");
+          const subVal = subProp.initializer;
 
-        // Clean up type string
-        typeStr = typeStr.replace(/mongoose\.Schema\.Types\./g, "").replace(/Schema\.Types\./g, "");
+          if (subKey === "type") {
+            if (ts.isArrayLiteralExpression(subVal) && subVal.elements.length > 0) {
+              typeStr = cleanTypeName(subVal.elements[0].getText(sourceFile)) + "[]";
+            } else {
+              typeStr = cleanTypeName(subVal.getText(sourceFile));
+            }
+          } else if (subKey === "required") {
+            isRequired = subVal.kind === ts.SyntaxKind.TrueKeyword;
+          } else if (subKey === "unique") {
+            isUnique = subVal.kind === ts.SyntaxKind.TrueKeyword;
+          } else if (subKey === "ref") {
+            refTarget = subVal.getText(sourceFile).replace(/['"]/g, "");
+          }
+        }
+      }
 
-        props.push({
-          name: fieldName,
-          type: typeStr,
-          required: isRequired,
-          unique: isUnique,
-          ref: refTarget,
-          line: lineNum + i,
+      fields.push({
+        name: fieldName,
+        type: typeStr,
+        required: isRequired,
+        unique: isUnique,
+        ref: refTarget,
+        line,
+      });
+    }
+
+    return fields;
+  }
+
+  function visit(node: ts.Node) {
+    // 1. Check for `new Schema({ ... })` or `new mongoose.Schema(...)` or `Schema(...)`
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const varName = node.name.getText(sourceFile);
+      let init = node.initializer;
+      if (ts.isAsExpression(init)) init = init.expression;
+
+      if (
+        (ts.isNewExpression(init) || ts.isCallExpression(init)) &&
+        /Schema$/i.test(init.expression.getText(sourceFile))
+      ) {
+        const firstArg = init.arguments?.[0];
+        if (firstArg && ts.isObjectLiteralExpression(firstArg)) {
+          const fields = extractFieldsFromObjectLiteral(firstArg);
+          schemaVarToFields.set(varName, {
+            line: getLineNumber(node.pos),
+            fields,
+          });
+        }
+      }
+    }
+
+    // 2. Check for `model("User", UserSchema)` or `mongoose.model("User", ...)`
+    if (ts.isCallExpression(node)) {
+      const exprText = node.expression.getText(sourceFile);
+      if (/^(?:mongoose\.)?model$/i.test(exprText) && node.arguments.length >= 1) {
+        const firstArg = node.arguments[0];
+        if (ts.isStringLiteral(firstArg) || ts.isNoSubstitutionTemplateLiteral(firstArg)) {
+          const modelName = firstArg.text;
+          const secondArg = node.arguments[1];
+
+          let fields: ExtractedField[] = [];
+          let line = getLineNumber(node.pos);
+
+          if (secondArg && ts.isIdentifier(secondArg)) {
+            const schemaVar = secondArg.getText(sourceFile);
+            schemaVarToModelName.set(schemaVar, modelName);
+            const found = schemaVarToFields.get(schemaVar);
+            if (found) {
+              fields = found.fields;
+              line = found.line;
+            }
+          } else if (secondArg && ts.isObjectLiteralExpression(secondArg)) {
+            fields = extractFieldsFromObjectLiteral(secondArg);
+          } else if (
+            secondArg &&
+            (ts.isNewExpression(secondArg) || ts.isCallExpression(secondArg)) &&
+            secondArg.arguments?.[0] &&
+            ts.isObjectLiteralExpression(secondArg.arguments[0])
+          ) {
+            fields = extractFieldsFromObjectLiteral(secondArg.arguments[0]);
+          }
+
+          if (fields.length > 0) {
+            schemas.push({
+              modelName,
+              collectionName: modelName.toLowerCase() + "s",
+              file: filePath,
+              line,
+              fields,
+            });
+          }
+        }
+      }
+    }
+
+    // 3. Typegoose: Class with @prop() decorators
+    if (ts.isClassDeclaration(node) && node.name) {
+      const className = node.name.getText(sourceFile);
+      const props: ExtractedField[] = [
+        {
+          name: "_id",
+          type: "ObjectId",
+          required: true,
+          unique: true,
+          line: getLineNumber(node.pos),
+        },
+      ];
+
+      let hasTypegooseProp = false;
+      for (const member of node.members) {
+        if (!ts.isPropertyDeclaration(member)) continue;
+        const memberName = member.name.getText(sourceFile);
+        const memberLine = getLineNumber(member.pos);
+        const memberType = member.type ? member.type.getText(sourceFile) : "Mixed";
+
+        // Check if has decorators (e.g. @prop)
+        const text = member.getText(sourceFile);
+        if (text.includes("@prop") || member.modifiers?.some((m) => m.getText(sourceFile).includes("prop"))) {
+          hasTypegooseProp = true;
+          const refMatch = /ref\s*:\s*["']?([A-Za-z0-9_]+)["']?/.exec(text);
+          const reqMatch = /required\s*:\s*true/.test(text);
+          const uqMatch = /unique\s*:\s*true/.test(text);
+
+          props.push({
+            name: memberName,
+            type: memberType,
+            required: reqMatch,
+            unique: uqMatch,
+            ref: refMatch ? refMatch[1] : undefined,
+            line: memberLine,
+          });
+        }
+      }
+
+      if (hasTypegooseProp) {
+        schemas.push({
+          modelName: className,
+          collectionName: className.toLowerCase() + "s",
+          file: filePath,
+          line: getLineNumber(node.pos),
+          fields: props,
         });
       }
     }
 
-    models.push({
-      name: modelName,
-      collection: collectionName,
-      file: filePath,
-      line: lineNum,
-      properties: props,
-    });
+    ts.forEachChild(node, visit);
   }
 
-  return models;
+  visit(sourceFile);
+
+  // If a schema variable was declared with Schema({ ... }) but model() was called with that variable later or exported
+  for (const [varName, { line, fields }] of schemaVarToFields.entries()) {
+    const isAlreadyExtracted = schemas.some((s) => s.file === filePath && s.fields === fields);
+    if (!isAlreadyExtracted) {
+      const inferredName = varName.replace(/Schema$/i, "");
+      schemas.push({
+        modelName: inferredName,
+        collectionName: inferredName.toLowerCase() + "s",
+        file: filePath,
+        line,
+        fields,
+      });
+    }
+  }
+
+  return schemas;
 }
 
 export const mongooseAdapter: DatabaseAdapter = {
   name: "mongoose",
   supportedFeatures: [
-    "Mongoose Schemas", "type definitions", "required", "unique", "ref relationships",
+    "Mongoose Schemas",
+    "AST Type extraction",
+    "required / unique constraints",
+    "ref cross-collection relationships",
+    "Typegoose @prop support",
   ],
   detect(files: ScannedFile[]): boolean {
-    return files.some((f) => 
-      f.path.endsWith("package.json") ||
-      f.path.includes("models/") ||
-      f.path.includes("schema/") ||
-      f.path.endsWith(".model.ts") ||
-      f.path.endsWith(".model.js")
+    // Only trigger if actual schema/model code or files exist
+    return files.some(
+      (f) =>
+        f.path.includes("models/") ||
+        f.path.includes("schema/") ||
+        f.path.includes("schemas/") ||
+        f.path.endsWith(".model.ts") ||
+        f.path.endsWith(".model.js") ||
+        f.path.endsWith(".schema.ts") ||
+        f.path.endsWith(".schema.js")
     );
   },
   async extract(repoRoot: string, files: ScannedFile[]): Promise<DatabaseModel> {
     const candidateFiles = files.filter(
       (f) =>
-        (f.path.endsWith(".ts") || f.path.endsWith(".js")) &&
+        (f.path.endsWith(".ts") || f.path.endsWith(".js") || f.path.endsWith(".mjs")) &&
         !f.path.endsWith(".d.ts") &&
-        (f.path.includes("models") || f.path.includes("schema") || f.path.includes("entities"))
+        !f.path.includes("node_modules") &&
+        (f.path.includes("model") ||
+          f.path.includes("schema") ||
+          f.path.includes("entity") ||
+          f.path.includes("entities"))
     );
 
-    const allModels: MongooseModel[] = [];
+    const allSchemas: ExtractedSchema[] = [];
     const scannedPaths: string[] = [];
 
     for (const file of candidateFiles) {
       try {
         const content = await fs.readFile(path.join(repoRoot, file.path), "utf8");
-        if (content.includes("Schema") || content.includes("mongoose")) {
-          const parsed = parseMongooseSchemas(content, file.path);
+        if (
+          content.includes("Schema") ||
+          content.includes("model") ||
+          content.includes("mongoose") ||
+          content.includes("@prop")
+        ) {
+          const parsed = parseMongooseAST(content, file.path);
           if (parsed.length > 0) {
-            allModels.push(...parsed);
+            allSchemas.push(...parsed);
             scannedPaths.push(file.path);
           }
         }
@@ -155,12 +343,19 @@ export const mongooseAdapter: DatabaseAdapter = {
     const relationships: Relationship[] = [];
     const modelNameToTable = new Map<string, string>();
 
-    for (const m of allModels) {
-      modelNameToTable.set(m.name, m.collection);
-      modelNameToTable.set(m.collection, m.collection);
+    // Deduplicate by collectionName
+    const seenCollections = new Set<string>();
 
-      const columns: Column[] = m.properties.map((p) => ({
-        id: columnId(m.collection, p.name),
+    for (const m of allSchemas) {
+      if (seenCollections.has(m.collectionName)) continue;
+      seenCollections.add(m.collectionName);
+
+      modelNameToTable.set(m.modelName, m.collectionName);
+      modelNameToTable.set(m.collectionName, m.collectionName);
+      modelNameToTable.set(m.modelName.toLowerCase(), m.collectionName);
+
+      const columns: Column[] = m.fields.map((p) => ({
+        id: columnId(m.collectionName, p.name),
         name: p.name,
         type: p.type,
         nullable: !p.required,
@@ -172,10 +367,10 @@ export const mongooseAdapter: DatabaseAdapter = {
       }));
 
       tables.push({
-        id: tableId(m.collection),
-        name: m.collection,
-        dbName: m.collection,
-        explanation: `Mongoose Model: ${m.name}`,
+        id: tableId(m.collectionName),
+        name: m.collectionName,
+        dbName: m.collectionName,
+        explanation: `MongoDB Collection (from model: ${m.modelName})`,
         status: "verified",
         evidence: [{ file: m.file, lines: [m.line, m.line] }],
         columns,
@@ -183,19 +378,21 @@ export const mongooseAdapter: DatabaseAdapter = {
     }
 
     // Build relationships from ref
-    for (const m of allModels) {
-      for (const p of m.properties) {
+    for (const m of allSchemas) {
+      for (const p of m.fields) {
         if (p.ref && modelNameToTable.has(p.ref)) {
           const targetTable = modelNameToTable.get(p.ref)!;
-          relationships.push({
-            id: relationshipId(columnId(m.collection, p.name), columnId(targetTable, "_id")),
-            from: columnId(m.collection, p.name),
-            to: columnId(targetTable, "_id"),
-            cardinality: "one-to-many",
-            enforcement: "orm-declared",
-            status: "inferred",
-            evidence: [{ file: m.file, lines: [p.line, p.line] }],
-          });
+          if (targetTable !== m.collectionName) {
+            relationships.push({
+              id: relationshipId(columnId(m.collectionName, p.name), columnId(targetTable, "_id")),
+              from: columnId(m.collectionName, p.name),
+              to: columnId(targetTable, "_id"),
+              cardinality: "one-to-many",
+              enforcement: "orm-declared",
+              status: "inferred",
+              evidence: [{ file: m.file, lines: [p.line, p.line] }],
+            });
+          }
         }
       }
     }

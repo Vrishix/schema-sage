@@ -1008,103 +1008,239 @@ init_ids();
 init_version();
 import { promises as fs4 } from "node:fs";
 import path4 from "node:path";
-function parseMongooseSchemas(fileContent, filePath) {
-  const models = [];
-  const lines = fileContent.split(/\r?\n/);
-  const schemaRegex = /(?:const|let|var)\s+([A-Za-z0-9_]+)\s*=\s*(?:new\s+)?(?:mongoose\.)?Schema\s*\(\s*\{([\s\S]*?)\}\s*(?:,\s*\{([\s\S]*?)\})?\s*\)/g;
-  let match;
-  while ((match = schemaRegex.exec(fileContent)) !== null) {
-    const schemaVarName = match[1];
-    const schemaBody = match[2];
-    const schemaOptions = match[3] || "";
-    const modelRegRegex = new RegExp(`(?:mongoose\\.)?model\\s*\\(\\s*["']([^"']+)["']\\s*,\\s*${schemaVarName}`, "i");
-    const modelRegMatch = modelRegRegex.exec(fileContent);
-    const modelName = modelRegMatch ? modelRegMatch[1] : schemaVarName.replace(/Schema$/i, "");
-    const collMatch = /collection\s*:\s*["']([^"']+)["']/i.exec(schemaOptions);
-    const collectionName = collMatch ? collMatch[1] : modelName.toLowerCase() + "s";
-    const matchIndex = match.index;
-    const lineNum = fileContent.substring(0, matchIndex).split("\n").length;
-    const props = [
+import ts from "typescript";
+function cleanTypeName(t) {
+  return t.replace(/^(?:mongoose\.)?(?:Schema\.)?(?:Types\.)?/, "").replace(/^String$/i, "string").replace(/^Number$/i, "number").replace(/^Boolean$/i, "boolean").replace(/^Date$/i, "Date").replace(/^ObjectId$/i, "ObjectId");
+}
+function parseMongooseAST(sourceText, filePath) {
+  const sourceFile = ts.createSourceFile(
+    filePath,
+    sourceText,
+    ts.ScriptTarget.Latest,
+    true,
+    ts.ScriptKind.TS
+  );
+  const schemas = [];
+  const schemaVarToFields = /* @__PURE__ */ new Map();
+  const schemaVarToModelName = /* @__PURE__ */ new Map();
+  function getLineNumber(pos) {
+    return sourceFile.getLineAndCharacterOfPosition(pos).line + 1;
+  }
+  function extractFieldsFromObjectLiteral(objLiteral) {
+    const fields = [
       {
         name: "_id",
         type: "ObjectId",
         required: true,
         unique: true,
-        line: lineNum
+        line: getLineNumber(objLiteral.pos)
       }
     ];
-    const bodyLines = schemaBody.split("\n");
-    for (let i = 0; i < bodyLines.length; i++) {
-      const bLine = bodyLines[i].trim();
-      const simpleFieldMatch = /^([A-Za-z0-9_]+)\s*:\s*(?:\{([^}]*)\}|([A-Za-z0-9_.[\]]+))/.exec(bLine);
-      if (simpleFieldMatch) {
-        const fieldName = simpleFieldMatch[1];
-        if (fieldName === "_id")
-          continue;
-        const fieldObj = simpleFieldMatch[2];
-        const directType = simpleFieldMatch[3];
-        let typeStr = directType || "Mixed";
-        let isRequired = false;
-        let isUnique = false;
-        let refTarget;
-        if (fieldObj) {
-          const typeMatch = /type\s*:\s*([A-Za-z0-9_.[\]]+)/.exec(fieldObj);
-          if (typeMatch)
-            typeStr = typeMatch[1];
-          isRequired = /required\s*:\s*true/i.test(fieldObj);
-          isUnique = /unique\s*:\s*true/i.test(fieldObj);
-          const refMatch = /ref\s*:\s*["']([^"']+)["']/.exec(fieldObj);
-          if (refMatch)
-            refTarget = refMatch[1];
+    for (const prop of objLiteral.properties) {
+      if (!ts.isPropertyAssignment(prop))
+        continue;
+      const fieldName = prop.name.getText(sourceFile).replace(/['"]/g, "");
+      if (fieldName === "_id")
+        continue;
+      let typeStr = "Mixed";
+      let isRequired = false;
+      let isUnique = false;
+      let refTarget;
+      const init = prop.initializer;
+      const line = getLineNumber(prop.pos);
+      if (ts.isIdentifier(init) || ts.isPropertyAccessExpression(init)) {
+        typeStr = cleanTypeName(init.getText(sourceFile));
+      } else if (ts.isArrayLiteralExpression(init)) {
+        if (init.elements.length > 0) {
+          const firstElem = init.elements[0];
+          if (ts.isObjectLiteralExpression(firstElem)) {
+            for (const subProp of firstElem.properties) {
+              if (ts.isPropertyAssignment(subProp)) {
+                const subKey = subProp.name.getText(sourceFile).replace(/['"]/g, "");
+                if (subKey === "type")
+                  typeStr = cleanTypeName(subProp.initializer.getText(sourceFile)) + "[]";
+                if (subKey === "ref")
+                  refTarget = subProp.initializer.getText(sourceFile).replace(/['"]/g, "");
+              }
+            }
+          } else {
+            typeStr = cleanTypeName(firstElem.getText(sourceFile)) + "[]";
+          }
+        } else {
+          typeStr = "Array";
         }
-        typeStr = typeStr.replace(/mongoose\.Schema\.Types\./g, "").replace(/Schema\.Types\./g, "");
-        props.push({
-          name: fieldName,
-          type: typeStr,
-          required: isRequired,
-          unique: isUnique,
-          ref: refTarget,
-          line: lineNum + i
+      } else if (ts.isObjectLiteralExpression(init)) {
+        for (const subProp of init.properties) {
+          if (!ts.isPropertyAssignment(subProp))
+            continue;
+          const subKey = subProp.name.getText(sourceFile).replace(/['"]/g, "");
+          const subVal = subProp.initializer;
+          if (subKey === "type") {
+            if (ts.isArrayLiteralExpression(subVal) && subVal.elements.length > 0) {
+              typeStr = cleanTypeName(subVal.elements[0].getText(sourceFile)) + "[]";
+            } else {
+              typeStr = cleanTypeName(subVal.getText(sourceFile));
+            }
+          } else if (subKey === "required") {
+            isRequired = subVal.kind === ts.SyntaxKind.TrueKeyword;
+          } else if (subKey === "unique") {
+            isUnique = subVal.kind === ts.SyntaxKind.TrueKeyword;
+          } else if (subKey === "ref") {
+            refTarget = subVal.getText(sourceFile).replace(/['"]/g, "");
+          }
+        }
+      }
+      fields.push({
+        name: fieldName,
+        type: typeStr,
+        required: isRequired,
+        unique: isUnique,
+        ref: refTarget,
+        line
+      });
+    }
+    return fields;
+  }
+  function visit(node) {
+    if (ts.isVariableDeclaration(node) && node.initializer) {
+      const varName = node.name.getText(sourceFile);
+      let init = node.initializer;
+      if (ts.isAsExpression(init))
+        init = init.expression;
+      if ((ts.isNewExpression(init) || ts.isCallExpression(init)) && /Schema$/i.test(init.expression.getText(sourceFile))) {
+        const firstArg = init.arguments?.[0];
+        if (firstArg && ts.isObjectLiteralExpression(firstArg)) {
+          const fields = extractFieldsFromObjectLiteral(firstArg);
+          schemaVarToFields.set(varName, {
+            line: getLineNumber(node.pos),
+            fields
+          });
+        }
+      }
+    }
+    if (ts.isCallExpression(node)) {
+      const exprText = node.expression.getText(sourceFile);
+      if (/^(?:mongoose\.)?model$/i.test(exprText) && node.arguments.length >= 1) {
+        const firstArg = node.arguments[0];
+        if (ts.isStringLiteral(firstArg) || ts.isNoSubstitutionTemplateLiteral(firstArg)) {
+          const modelName = firstArg.text;
+          const secondArg = node.arguments[1];
+          let fields = [];
+          let line = getLineNumber(node.pos);
+          if (secondArg && ts.isIdentifier(secondArg)) {
+            const schemaVar = secondArg.getText(sourceFile);
+            schemaVarToModelName.set(schemaVar, modelName);
+            const found = schemaVarToFields.get(schemaVar);
+            if (found) {
+              fields = found.fields;
+              line = found.line;
+            }
+          } else if (secondArg && ts.isObjectLiteralExpression(secondArg)) {
+            fields = extractFieldsFromObjectLiteral(secondArg);
+          } else if (secondArg && (ts.isNewExpression(secondArg) || ts.isCallExpression(secondArg)) && secondArg.arguments?.[0] && ts.isObjectLiteralExpression(secondArg.arguments[0])) {
+            fields = extractFieldsFromObjectLiteral(secondArg.arguments[0]);
+          }
+          if (fields.length > 0) {
+            schemas.push({
+              modelName,
+              collectionName: modelName.toLowerCase() + "s",
+              file: filePath,
+              line,
+              fields
+            });
+          }
+        }
+      }
+    }
+    if (ts.isClassDeclaration(node) && node.name) {
+      const className = node.name.getText(sourceFile);
+      const props = [
+        {
+          name: "_id",
+          type: "ObjectId",
+          required: true,
+          unique: true,
+          line: getLineNumber(node.pos)
+        }
+      ];
+      let hasTypegooseProp = false;
+      for (const member of node.members) {
+        if (!ts.isPropertyDeclaration(member))
+          continue;
+        const memberName = member.name.getText(sourceFile);
+        const memberLine = getLineNumber(member.pos);
+        const memberType = member.type ? member.type.getText(sourceFile) : "Mixed";
+        const text = member.getText(sourceFile);
+        if (text.includes("@prop") || member.modifiers?.some((m) => m.getText(sourceFile).includes("prop"))) {
+          hasTypegooseProp = true;
+          const refMatch = /ref\s*:\s*["']?([A-Za-z0-9_]+)["']?/.exec(text);
+          const reqMatch = /required\s*:\s*true/.test(text);
+          const uqMatch = /unique\s*:\s*true/.test(text);
+          props.push({
+            name: memberName,
+            type: memberType,
+            required: reqMatch,
+            unique: uqMatch,
+            ref: refMatch ? refMatch[1] : void 0,
+            line: memberLine
+          });
+        }
+      }
+      if (hasTypegooseProp) {
+        schemas.push({
+          modelName: className,
+          collectionName: className.toLowerCase() + "s",
+          file: filePath,
+          line: getLineNumber(node.pos),
+          fields: props
         });
       }
     }
-    models.push({
-      name: modelName,
-      collection: collectionName,
-      file: filePath,
-      line: lineNum,
-      properties: props
-    });
+    ts.forEachChild(node, visit);
   }
-  return models;
+  visit(sourceFile);
+  for (const [varName, { line, fields }] of schemaVarToFields.entries()) {
+    const isAlreadyExtracted = schemas.some((s) => s.file === filePath && s.fields === fields);
+    if (!isAlreadyExtracted) {
+      const inferredName = varName.replace(/Schema$/i, "");
+      schemas.push({
+        modelName: inferredName,
+        collectionName: inferredName.toLowerCase() + "s",
+        file: filePath,
+        line,
+        fields
+      });
+    }
+  }
+  return schemas;
 }
 var mongooseAdapter = {
   name: "mongoose",
   supportedFeatures: [
     "Mongoose Schemas",
-    "type definitions",
-    "required",
-    "unique",
-    "ref relationships"
+    "AST Type extraction",
+    "required / unique constraints",
+    "ref cross-collection relationships",
+    "Typegoose @prop support"
   ],
   detect(files) {
     return files.some(
-      (f) => f.path.endsWith("package.json") || f.path.includes("models/") || f.path.includes("schema/") || f.path.endsWith(".model.ts") || f.path.endsWith(".model.js")
+      (f) => f.path.includes("models/") || f.path.includes("schema/") || f.path.includes("schemas/") || f.path.endsWith(".model.ts") || f.path.endsWith(".model.js") || f.path.endsWith(".schema.ts") || f.path.endsWith(".schema.js")
     );
   },
   async extract(repoRoot, files) {
     const candidateFiles = files.filter(
-      (f) => (f.path.endsWith(".ts") || f.path.endsWith(".js")) && !f.path.endsWith(".d.ts") && (f.path.includes("models") || f.path.includes("schema") || f.path.includes("entities"))
+      (f) => (f.path.endsWith(".ts") || f.path.endsWith(".js") || f.path.endsWith(".mjs")) && !f.path.endsWith(".d.ts") && !f.path.includes("node_modules") && (f.path.includes("model") || f.path.includes("schema") || f.path.includes("entity") || f.path.includes("entities"))
     );
-    const allModels = [];
+    const allSchemas = [];
     const scannedPaths = [];
     for (const file of candidateFiles) {
       try {
         const content = await fs4.readFile(path4.join(repoRoot, file.path), "utf8");
-        if (content.includes("Schema") || content.includes("mongoose")) {
-          const parsed = parseMongooseSchemas(content, file.path);
+        if (content.includes("Schema") || content.includes("model") || content.includes("mongoose") || content.includes("@prop")) {
+          const parsed = parseMongooseAST(content, file.path);
           if (parsed.length > 0) {
-            allModels.push(...parsed);
+            allSchemas.push(...parsed);
             scannedPaths.push(file.path);
           }
         }
@@ -1114,11 +1250,16 @@ var mongooseAdapter = {
     const tables = [];
     const relationships = [];
     const modelNameToTable = /* @__PURE__ */ new Map();
-    for (const m of allModels) {
-      modelNameToTable.set(m.name, m.collection);
-      modelNameToTable.set(m.collection, m.collection);
-      const columns = m.properties.map((p) => ({
-        id: columnId(m.collection, p.name),
+    const seenCollections = /* @__PURE__ */ new Set();
+    for (const m of allSchemas) {
+      if (seenCollections.has(m.collectionName))
+        continue;
+      seenCollections.add(m.collectionName);
+      modelNameToTable.set(m.modelName, m.collectionName);
+      modelNameToTable.set(m.collectionName, m.collectionName);
+      modelNameToTable.set(m.modelName.toLowerCase(), m.collectionName);
+      const columns = m.fields.map((p) => ({
+        id: columnId(m.collectionName, p.name),
         name: p.name,
         type: p.type,
         nullable: !p.required,
@@ -1129,28 +1270,30 @@ var mongooseAdapter = {
         evidence: [{ file: m.file, lines: [p.line, p.line] }]
       }));
       tables.push({
-        id: tableId(m.collection),
-        name: m.collection,
-        dbName: m.collection,
-        explanation: `Mongoose Model: ${m.name}`,
+        id: tableId(m.collectionName),
+        name: m.collectionName,
+        dbName: m.collectionName,
+        explanation: `MongoDB Collection (from model: ${m.modelName})`,
         status: "verified",
         evidence: [{ file: m.file, lines: [m.line, m.line] }],
         columns
       });
     }
-    for (const m of allModels) {
-      for (const p of m.properties) {
+    for (const m of allSchemas) {
+      for (const p of m.fields) {
         if (p.ref && modelNameToTable.has(p.ref)) {
           const targetTable = modelNameToTable.get(p.ref);
-          relationships.push({
-            id: relationshipId(columnId(m.collection, p.name), columnId(targetTable, "_id")),
-            from: columnId(m.collection, p.name),
-            to: columnId(targetTable, "_id"),
-            cardinality: "one-to-many",
-            enforcement: "orm-declared",
-            status: "inferred",
-            evidence: [{ file: m.file, lines: [p.line, p.line] }]
-          });
+          if (targetTable !== m.collectionName) {
+            relationships.push({
+              id: relationshipId(columnId(m.collectionName, p.name), columnId(targetTable, "_id")),
+              from: columnId(m.collectionName, p.name),
+              to: columnId(targetTable, "_id"),
+              cardinality: "one-to-many",
+              enforcement: "orm-declared",
+              status: "inferred",
+              evidence: [{ file: m.file, lines: [p.line, p.line] }]
+            });
+          }
         }
       }
     }
@@ -1797,20 +1940,20 @@ function appSection(m) {
 init_version();
 
 // src/usage/scan-usage.ts
-import ts from "typescript";
+import ts2 from "typescript";
 var READ = /* @__PURE__ */ new Set(["findMany", "findUnique", "findUniqueOrThrow", "findFirst", "findFirstOrThrow", "count", "aggregate", "groupBy"]);
 var WRITE = /* @__PURE__ */ new Set(["create", "createMany", "createManyAndReturn", "update", "updateMany", "upsert"]);
 var DELETE = /* @__PURE__ */ new Set(["delete", "deleteMany"]);
 var RAW = /* @__PURE__ */ new Set(["$queryRaw", "$queryRawUnsafe", "$executeRaw", "$executeRawUnsafe"]);
 var DEFAULT_RECEIVERS = ["prisma", "db"];
-var kindFor = (path8) => path8.endsWith(".tsx") ? ts.ScriptKind.TSX : path8.endsWith(".jsx") ? ts.ScriptKind.JSX : path8.endsWith(".js") || path8.endsWith(".mjs") || path8.endsWith(".cjs") ? ts.ScriptKind.JS : ts.ScriptKind.TS;
+var kindFor = (path8) => path8.endsWith(".tsx") ? ts2.ScriptKind.TSX : path8.endsWith(".jsx") ? ts2.ScriptKind.JSX : path8.endsWith(".js") || path8.endsWith(".mjs") || path8.endsWith(".cjs") ? ts2.ScriptKind.JS : ts2.ScriptKind.TS;
 var lowerFirst = (s) => s.charAt(0).toLowerCase() + s.slice(1);
 function enclosingFunction(node) {
   let cur = node.parent;
   while (cur) {
-    if ((ts.isFunctionDeclaration(cur) || ts.isMethodDeclaration(cur)) && cur.name && ts.isIdentifier(cur.name))
+    if ((ts2.isFunctionDeclaration(cur) || ts2.isMethodDeclaration(cur)) && cur.name && ts2.isIdentifier(cur.name))
       return cur.name.text;
-    if ((ts.isArrowFunction(cur) || ts.isFunctionExpression(cur)) && cur.parent && ts.isVariableDeclaration(cur.parent) && ts.isIdentifier(cur.parent.name))
+    if ((ts2.isArrowFunction(cur) || ts2.isFunctionExpression(cur)) && cur.parent && ts2.isVariableDeclaration(cur.parent) && ts2.isIdentifier(cur.parent.name))
       return cur.parent.name.text;
     cur = cur.parent;
   }
@@ -1819,26 +1962,26 @@ function enclosingFunction(node) {
 function clientNames(sf) {
   const out = [];
   const visit = (n) => {
-    if (ts.isVariableDeclaration(n) && ts.isIdentifier(n.name) && n.initializer && ts.isNewExpression(n.initializer)) {
+    if (ts2.isVariableDeclaration(n) && ts2.isIdentifier(n.name) && n.initializer && ts2.isNewExpression(n.initializer)) {
       const callee = n.initializer.expression;
-      if (ts.isIdentifier(callee) && callee.text === "PrismaClient")
+      if (ts2.isIdentifier(callee) && callee.text === "PrismaClient")
         out.push(n.name.text);
     }
-    ts.forEachChild(n, visit);
+    ts2.forEachChild(n, visit);
   };
   visit(sf);
   return out;
 }
 function receiverName(expr) {
-  if (ts.isIdentifier(expr))
+  if (ts2.isIdentifier(expr))
     return expr.text;
-  if (ts.isPropertyAccessExpression(expr))
+  if (ts2.isPropertyAccessExpression(expr))
     return expr.name.text;
   return null;
 }
 function scanUsage(files, modelNames) {
   const byCamel = new Map(modelNames.map((m) => [lowerFirst(m), m]));
-  const parsed = files.map((f) => ({ path: f.path, sf: ts.createSourceFile(f.path, f.text, ts.ScriptTarget.Latest, true, kindFor(f.path)) }));
+  const parsed = files.map((f) => ({ path: f.path, sf: ts2.createSourceFile(f.path, f.text, ts2.ScriptTarget.Latest, true, kindFor(f.path)) }));
   const receivers = new Set(DEFAULT_RECEIVERS);
   for (const { sf } of parsed)
     for (const n of clientNames(sf))
@@ -1847,11 +1990,11 @@ function scanUsage(files, modelNames) {
   const rawSql = [];
   for (const { path: path8, sf } of parsed) {
     const visit = (node) => {
-      if (ts.isCallExpression(node) && ts.isPropertyAccessExpression(node.expression)) {
+      if (ts2.isCallExpression(node) && ts2.isPropertyAccessExpression(node.expression)) {
         const method = node.expression.name.text;
         const target = node.expression.expression;
         const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-        if (ts.isPropertyAccessExpression(target)) {
+        if (ts2.isPropertyAccessExpression(target)) {
           const modelKey = target.name.text;
           const recv = receiverName(target.expression);
           const op = READ.has(method) ? "read" : WRITE.has(method) ? "write" : DELETE.has(method) ? "delete" : null;
@@ -1865,19 +2008,19 @@ function scanUsage(files, modelNames) {
           rawSql.push({ file: path8, line, method });
         }
       }
-      ts.forEachChild(node, visit);
+      ts2.forEachChild(node, visit);
     };
     visit(sf);
   }
   for (const { path: path8, sf } of parsed) {
     const visit = (node) => {
-      if (ts.isTaggedTemplateExpression(node) && ts.isPropertyAccessExpression(node.tag)) {
+      if (ts2.isTaggedTemplateExpression(node) && ts2.isPropertyAccessExpression(node.tag)) {
         const recv = receiverName(node.tag.expression);
         if (recv && receivers.has(recv) && RAW.has(node.tag.name.text)) {
           rawSql.push({ file: path8, line: sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1, method: node.tag.name.text });
         }
       }
-      ts.forEachChild(node, visit);
+      ts2.forEachChild(node, visit);
     };
     visit(sf);
   }
@@ -1885,11 +2028,11 @@ function scanUsage(files, modelNames) {
 }
 
 // src/usage/flows.ts
-import ts2 from "typescript";
+import ts3 from "typescript";
 var HTTP = /* @__PURE__ */ new Set(["get", "post", "put", "patch", "delete"]);
 var NEXT_METHODS = /* @__PURE__ */ new Set(["GET", "POST", "PUT", "PATCH", "DELETE"]);
 var MAX_DEPTH = 5;
-var kindFor2 = (path8) => path8.endsWith(".tsx") ? ts2.ScriptKind.TSX : path8.endsWith(".jsx") ? ts2.ScriptKind.JSX : path8.endsWith(".js") || path8.endsWith(".mjs") || path8.endsWith(".cjs") ? ts2.ScriptKind.JS : ts2.ScriptKind.TS;
+var kindFor2 = (path8) => path8.endsWith(".tsx") ? ts3.ScriptKind.TSX : path8.endsWith(".jsx") ? ts3.ScriptKind.JSX : path8.endsWith(".js") || path8.endsWith(".mjs") || path8.endsWith(".cjs") ? ts3.ScriptKind.JS : ts3.ScriptKind.TS;
 function nextPagesApiFromFile(file) {
   const m = /(?:^|\/)pages\/(api\/.*)\.(ts|tsx|js|jsx|mjs)$/.exec(file);
   if (!m)
@@ -1909,28 +2052,28 @@ function buildFlows(files, usages) {
   const endpoints = [];
   const handlerRefs = [];
   for (const f of files) {
-    const sf = ts2.createSourceFile(f.path, f.text, ts2.ScriptTarget.Latest, true, kindFor2(f.path));
+    const sf = ts3.createSourceFile(f.path, f.text, ts3.ScriptTarget.Latest, true, kindFor2(f.path));
     const nextPath = nextRouteFromFile(f.path);
     const collect = (node) => {
       let name = null;
-      if ((ts2.isFunctionDeclaration(node) || ts2.isMethodDeclaration(node)) && node.name && ts2.isIdentifier(node.name))
+      if ((ts3.isFunctionDeclaration(node) || ts3.isMethodDeclaration(node)) && node.name && ts3.isIdentifier(node.name))
         name = node.name.text;
-      if ((ts2.isArrowFunction(node) || ts2.isFunctionExpression(node)) && node.parent && ts2.isVariableDeclaration(node.parent) && ts2.isIdentifier(node.parent.name))
+      if ((ts3.isArrowFunction(node) || ts3.isFunctionExpression(node)) && node.parent && ts3.isVariableDeclaration(node.parent) && ts3.isIdentifier(node.parent.name))
         name = node.parent.name.text;
-      if ((ts2.isArrowFunction(node) || ts2.isFunctionExpression(node)) && !name)
+      if ((ts3.isArrowFunction(node) || ts3.isFunctionExpression(node)) && !name)
         name = `(inline ${f.path}:${sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1})`;
       if (name) {
         const calls = [];
         const scan = (n) => {
-          if (ts2.isCallExpression(n)) {
-            if (ts2.isIdentifier(n.expression))
+          if (ts3.isCallExpression(n)) {
+            if (ts3.isIdentifier(n.expression))
               calls.push(n.expression.text);
-            else if (ts2.isPropertyAccessExpression(n.expression))
+            else if (ts3.isPropertyAccessExpression(n.expression))
               calls.push(n.expression.name.text);
           }
-          ts2.forEachChild(n, scan);
+          ts3.forEachChild(n, scan);
         };
-        ts2.forEachChild(node, scan);
+        ts3.forEachChild(node, scan);
         const info = {
           name,
           file: f.path,
@@ -1941,12 +2084,12 @@ function buildFlows(files, usages) {
         fns.push(info);
         fnByNode.set(node, info);
       }
-      ts2.forEachChild(node, collect);
+      ts3.forEachChild(node, collect);
     };
     collect(sf);
     if (nextPath) {
       for (const stmt of sf.statements) {
-        if (ts2.isFunctionDeclaration(stmt) && stmt.name && NEXT_METHODS.has(stmt.name.text) && stmt.modifiers?.some((m) => m.kind === ts2.SyntaxKind.ExportKeyword)) {
+        if (ts3.isFunctionDeclaration(stmt) && stmt.name && NEXT_METHODS.has(stmt.name.text) && stmt.modifiers?.some((m) => m.kind === ts3.SyntaxKind.ExportKeyword)) {
           const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
           const ep = { method: stmt.name.text, path: nextPath || "/", file: f.path, line, handler: stmt.name.text };
           endpoints.push(ep);
@@ -1957,18 +2100,18 @@ function buildFlows(files, usages) {
     const pagesPath = nextPagesApiFromFile(f.path);
     if (pagesPath) {
       for (const stmt of sf.statements) {
-        const isDefault = (ts2.isFunctionDeclaration(stmt) || ts2.isVariableStatement(stmt)) && stmt.modifiers?.some((m) => m.kind === ts2.SyntaxKind.DefaultKeyword);
-        if (ts2.isFunctionDeclaration(stmt) && isDefault) {
+        const isDefault = (ts3.isFunctionDeclaration(stmt) || ts3.isVariableStatement(stmt)) && stmt.modifiers?.some((m) => m.kind === ts3.SyntaxKind.DefaultKeyword);
+        if (ts3.isFunctionDeclaration(stmt) && isDefault) {
           const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
           const label = stmt.name?.text ?? "default";
           const ep = { method: "ANY", path: pagesPath, file: f.path, line, handler: label };
           endpoints.push(ep);
           handlerRefs.push({ endpoint: ep, handlerName: stmt.name?.text ?? null, inline: stmt.name ? null : fnByNode.get(stmt) ?? null, file: f.path });
-        } else if (ts2.isExportAssignment(stmt) && !stmt.isExportEquals) {
+        } else if (ts3.isExportAssignment(stmt) && !stmt.isExportEquals) {
           const line = sf.getLineAndCharacterOfPosition(stmt.getStart(sf)).line + 1;
           const e = stmt.expression;
-          const handlerName = ts2.isIdentifier(e) ? e.text : null;
-          const inline = ts2.isArrowFunction(e) || ts2.isFunctionExpression(e) ? fnByNode.get(e) ?? null : null;
+          const handlerName = ts3.isIdentifier(e) ? e.text : null;
+          const inline = ts3.isArrowFunction(e) || ts3.isFunctionExpression(e) ? fnByNode.get(e) ?? null : null;
           const ep = { method: "ANY", path: pagesPath, file: f.path, line, handler: handlerName ?? inline?.name ?? "default" };
           endpoints.push(ep);
           handlerRefs.push({ endpoint: ep, handlerName, inline, file: f.path });
@@ -1976,13 +2119,13 @@ function buildFlows(files, usages) {
       }
     }
     const visit = (node) => {
-      if (ts2.isCallExpression(node) && ts2.isPropertyAccessExpression(node.expression) && HTTP.has(node.expression.name.text)) {
+      if (ts3.isCallExpression(node) && ts3.isPropertyAccessExpression(node.expression) && HTTP.has(node.expression.name.text)) {
         const [first, ...rest] = node.arguments;
-        if (first && ts2.isStringLiteralLike(first) && rest.length) {
+        if (first && ts3.isStringLiteralLike(first) && rest.length) {
           const last = rest[rest.length - 1];
           const line = sf.getLineAndCharacterOfPosition(node.getStart(sf)).line + 1;
-          const handlerName = ts2.isIdentifier(last) ? last.text : ts2.isPropertyAccessExpression(last) ? last.name.text : null;
-          const inlineFn = ts2.isArrowFunction(last) || ts2.isFunctionExpression(last) ? fnByNode.get(last) ?? null : null;
+          const handlerName = ts3.isIdentifier(last) ? last.text : ts3.isPropertyAccessExpression(last) ? last.name.text : null;
+          const inlineFn = ts3.isArrowFunction(last) || ts3.isFunctionExpression(last) ? fnByNode.get(last) ?? null : null;
           const label = handlerName ?? (inlineFn ? inlineFn.name : null);
           if (label) {
             const ep = { method: node.expression.name.text.toUpperCase(), path: first.text, file: f.path, line, handler: label };
@@ -1991,7 +2134,7 @@ function buildFlows(files, usages) {
           }
         }
       }
-      ts2.forEachChild(node, visit);
+      ts3.forEachChild(node, visit);
     };
     visit(sf);
   }
