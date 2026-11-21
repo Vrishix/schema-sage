@@ -1,5 +1,5 @@
 import { describe, it, expect } from "vitest";
-import { parseMongooseAST } from "../../src/adapters/mongoose/index.js";
+import { parseMongooseAST } from "../../src/adapters/mongoose/ast-parser.js";
 import { sqlAdapter } from "../../src/adapters/sql/index.js";
 
 describe("Mongoose Adapter AST Parser", () => {
@@ -26,21 +26,21 @@ describe("Mongoose Adapter AST Parser", () => {
 
     const schemas = parseMongooseAST(code, "src/models/user.model.ts");
     expect(schemas.length).toBeGreaterThanOrEqual(1);
-    const user = schemas.find(s => s.modelName === "User");
+    const user = schemas.find((s: any) => s.modelName === "User");
     expect(user).toBeDefined();
     expect(user?.collectionName).toBe("users");
 
-    const names = user?.fields.map(f => f.name);
+    const names = user?.fields.map((f: any) => f.name);
     expect(names).toContain("_id");
     expect(names).toContain("name");
     expect(names).toContain("email");
     expect(names).toContain("posts");
 
-    const email = user?.fields.find(f => f.name === "email");
+    const email = user?.fields.find((f: any) => f.name === "email");
     expect(email?.required).toBe(true);
     expect(email?.unique).toBe(true);
 
-    const posts = user?.fields.find(f => f.name === "posts");
+    const posts = user?.fields.find((f: any) => f.name === "posts");
     expect(posts?.ref).toBe("Post");
   });
 
@@ -56,7 +56,7 @@ describe("Mongoose Adapter AST Parser", () => {
     const schemas = parseMongooseAST(code, "models/Item.js");
     expect(schemas.length).toBe(1);
     expect(schemas[0].modelName).toBe("Item");
-    expect(schemas[0].fields.find(f => f.name === "title")?.type).toBe("string");
+    expect(schemas[0].fields.find((f: any) => f.name === "title")?.type).toBe("string");
   });
 });
 

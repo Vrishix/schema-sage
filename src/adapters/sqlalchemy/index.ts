@@ -232,7 +232,7 @@ export const sqlalchemyAdapter: DatabaseAdapter = {
             from: fromColId,
             to: toColId,
             cardinality: col.unique ? "one-to-one" : "one-to-many",
-            enforcement: "db-enforced",
+            enforcement: "orm-declared",
             status: "verified",
             evidence: [{ file: raw.file, lines: [col.line, col.line] }],
           });
