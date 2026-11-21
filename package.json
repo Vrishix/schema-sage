@@ -1,6 +1,6 @@
 {
   "name": "schemasage",
-  "version": "0.1.0-alpha.10",
+  "version": "0.1.0",
   "description": "Explains your database from code and migrations: an offline ER diagram with evidence links.",
   "author": "Parth (Vrishix)",
   "homepage": "https://github.com/Vrishix/schema-sage#readme",
