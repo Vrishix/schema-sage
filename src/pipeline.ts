@@ -24,6 +24,69 @@ export interface AnalyzeResult {
 }
 
 /**
+ * Output generator from an existing model (used by direct inspect as well).
+ */
+export async function writeModelArtifacts(
+  outputDir: string,
+  model: DatabaseModel
+): Promise<{ written: string[]; log: string[] }> {
+  const log: string[] = [];
+  const files: Record<string, string> = {
+    "data/database.json": JSON.stringify(model, null, 2) + "\n",
+    "markdown/database.md": databaseMarkdown(model),
+    "index.html": databaseHtml(model),
+  };
+  let redactions = 0;
+  for (const k of Object.keys(files)) {
+    const r = redactPatterns(files[k]);
+    files[k] = r.text;
+    redactions += r.hits.length;
+  }
+  if (redactions) log.push(`Redacted ${redactions} secret-like value(s) from output.`);
+
+  const entries = await writeOutput(outputDir, files);
+  const manifest = { tool: { name: "schemasage", version: TOOL_VERSION }, generatedAt: model.generatedAt, files: entries };
+  await writeOutput(outputDir, { "manifest.json": JSON.stringify(manifest, null, 2) + "\n" });
+  log.push(`Wrote ${entries.length + 1} files to artifacts/schemasage/`);
+  return { written: [...entries.map((e) => e.path), "manifest.json"], log };
+}
+
+/**
+ * Direct Database Inspection Pipeline: connects to live PostgreSQL or MongoDB,
+ * introspects the schema/collections, and generates the offline report.
+ */
+export async function inspectDatabase(connectionUrl: string, outputDir = "."): Promise<AnalyzeResult> {
+  const log: string[] = [];
+  let model: DatabaseModel;
+  let adapterName: string;
+
+  if (connectionUrl.startsWith("postgres://") || connectionUrl.startsWith("postgresql://")) {
+    log.push("Connecting to PostgreSQL database...");
+    const { introspectPostgres } = await import("./introspect/postgres.js");
+    model = await introspectPostgres(connectionUrl);
+    adapterName = "postgres-direct";
+  } else if (connectionUrl.startsWith("mongodb://") || connectionUrl.startsWith("mongodb+srv://")) {
+    log.push("Connecting to MongoDB database...");
+    const { introspectMongo } = await import("./introspect/mongo.js");
+    model = await introspectMongo(connectionUrl);
+    adapterName = "mongodb-direct";
+  } else {
+    throw new Error(`Unsupported connection protocol. Supported: postgres://, postgresql://, mongodb://, mongodb+srv://`);
+  }
+
+  log.push(`Introspected ${model.tables.length} table(s)/collection(s) and ${model.relationships.length} relationship(s).`);
+  const { written, log: writeLog } = await writeModelArtifacts(path.resolve(outputDir), model);
+  log.push(...writeLog);
+
+  return {
+    model,
+    adapter: adapterName,
+    written,
+    log,
+  };
+}
+
+/**
  * Read-only pipeline: scan -> extract -> validate -> redact -> write output.
  * Environment files are listed as skipped and never opened.
  */
@@ -59,26 +122,14 @@ export async function analyzeRepo(target: string, opts: { write?: boolean } = {}
     throw new Error("Model failed validation:\n" + issues.map((i) => `- [${i.rule}] ${i.message}`).join("\n"));
   }
 
-  const files: Record<string, string> = {
-    "data/database.json": JSON.stringify(model, null, 2) + "\n",
-    "markdown/database.md": databaseMarkdown(model),
-    "index.html": databaseHtml(model),
-  };
-  let redactions = 0;
-  for (const k of Object.keys(files)) {
-    const r = redactPatterns(files[k]);
-    files[k] = r.text;
-    redactions += r.hits.length;
+  if (!opts.write) {
+    return { model, adapter: adapter.name, written: [], log };
   }
-  if (redactions) log.push(`Redacted ${redactions} secret-like value(s) from output.`);
 
-  if (!opts.write) return { model, adapter: adapter.name, written: Object.keys(files), log };
+  const { written, log: writeLog } = await writeModelArtifacts(repoRoot, model);
+  log.push(...writeLog);
 
-  const entries = await writeOutput(repoRoot, files);
-  const manifest = { tool: { name: "schemasage", version: TOOL_VERSION }, generatedAt: model.generatedAt, files: entries };
-  await writeOutput(repoRoot, { "manifest.json": JSON.stringify(manifest, null, 2) + "\n" });
-  log.push(`Wrote ${entries.length + 1} files to artifacts/schemasage/`);
-  return { model, adapter: adapter.name, written: [...entries.map((e) => e.path), "manifest.json"], log };
+  return { model, adapter: adapter.name, written, log };
 }
 
 export const sha256 = (s: string) => createHash("sha256").update(s).digest("hex");
