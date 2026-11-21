@@ -1979,6 +1979,7 @@ var ERD_CSS = `
 // src/generator/html.ts
 import { createHash as createHash2 } from "node:crypto";
 var FILTER_SCRIPT = `(function(){
+  // 1. Search & Filter
   var filterInput = document.getElementById("filter");
   if(filterInput) {
     filterInput.addEventListener("input", function() {
@@ -1994,20 +1995,33 @@ var FILTER_SCRIPT = `(function(){
     });
   }
 
-  // Zoom controls for ERD
+  // 2. Pan and Zoom controls for ERD
   var currentScale = 1;
+  var panX = 0, panY = 0;
+  var isPanning = false;
+  var startX = 0, startY = 0;
   var canvas = document.querySelector(".erd-canvas");
-  window.zoomErd = function(delta) {
+  var wrap = document.querySelector(".erd-wrap");
+
+  function applyTransform() {
     if(!canvas) return;
-    currentScale = Math.min(2.5, Math.max(0.3, currentScale + delta));
-    canvas.style.transform = "scale(" + currentScale + ")";
+    canvas.style.transform = "translate(" + panX + "px, " + panY + "px) scale(" + currentScale + ")";
     canvas.style.transformOrigin = "top left";
+    var scaleIndicator = document.getElementById("zoom-indicator");
+    if(scaleIndicator) scaleIndicator.textContent = Math.round(currentScale * 100) + "%";
+  }
+
+  window.zoomErd = function(delta) {
+    currentScale = Math.min(3, Math.max(0.2, currentScale + delta));
+    applyTransform();
   };
   window.resetZoom = function() {
-    if(!canvas) return;
     currentScale = 1;
-    canvas.style.transform = "none";
+    panX = 0;
+    panY = 0;
+    applyTransform();
   };
+
   var btnIn = document.getElementById("zoom-in");
   var btnOut = document.getElementById("zoom-out");
   var btnReset = document.getElementById("zoom-reset");
@@ -2015,7 +2029,34 @@ var FILTER_SCRIPT = `(function(){
   if(btnOut) btnOut.onclick = function(){ zoomErd(-0.15); };
   if(btnReset) btnReset.onclick = function(){ resetZoom(); };
 
-  // Highlight connections on entity hover
+  if(wrap && canvas) {
+    wrap.addEventListener("mousedown", function(e) {
+      if(e.target.closest("a") || e.target.closest(".entity")) return;
+      isPanning = true;
+      startX = e.clientX - panX;
+      startY = e.clientY - panY;
+      wrap.style.cursor = "grabbing";
+    });
+    window.addEventListener("mousemove", function(e) {
+      if(!isPanning) return;
+      panX = e.clientX - startX;
+      panY = e.clientY - startY;
+      applyTransform();
+    });
+    window.addEventListener("mouseup", function() {
+      isPanning = false;
+      if(wrap) wrap.style.cursor = "grab";
+    });
+    wrap.addEventListener("wheel", function(e) {
+      if(e.ctrlKey || e.metaKey) {
+        e.preventDefault();
+        var delta = e.deltaY < 0 ? 0.1 : -0.1;
+        zoomErd(delta);
+      }
+    });
+  }
+
+  // 3. Highlight connections on entity hover
   document.querySelectorAll("g.entity").forEach(function(el) {
     var tableName = el.getAttribute("data-name");
     el.addEventListener("mouseenter", function() {
@@ -2023,10 +2064,10 @@ var FILTER_SCRIPT = `(function(){
         var from = (edge.getAttribute("data-from") || "").toLowerCase();
         var to = (edge.getAttribute("data-to") || "").toLowerCase();
         if(from === tableName || to === tableName) {
-          edge.style.strokeWidth = "3.5";
+          edge.style.strokeWidth = "3.8";
           edge.style.opacity = "1";
         } else {
-          edge.style.opacity = "0.15";
+          edge.style.opacity = "0.12";
         }
       });
     });
@@ -2036,9 +2077,77 @@ var FILTER_SCRIPT = `(function(){
         edge.style.opacity = "1";
       });
     });
+
+    // Click on entity scrolls smoothly to its detailed table card
+    el.addEventListener("click", function() {
+      var target = document.getElementById(tableName);
+      if(target) {
+        target.scrollIntoView({ behavior: "smooth", block: "center" });
+        target.classList.add("highlight-flash");
+        setTimeout(function(){ target.classList.remove("highlight-flash"); }, 2000);
+      }
+    });
   });
+
+  // 4. Diagram View Mode Switcher (Visual ERD vs Mermaid Diagram)
+  var tabVisual = document.getElementById("tab-visual");
+  var tabMermaid = document.getElementById("tab-mermaid");
+  var viewVisual = document.getElementById("view-visual");
+  var viewMermaid = document.getElementById("view-mermaid");
+
+  if(tabVisual && tabMermaid && viewVisual && viewMermaid) {
+    tabVisual.onclick = function() {
+      tabVisual.classList.add("active");
+      tabMermaid.classList.remove("active");
+      viewVisual.style.display = "block";
+      viewMermaid.style.display = "none";
+    };
+    tabMermaid.onclick = function() {
+      tabMermaid.classList.add("active");
+      tabVisual.classList.remove("active");
+      viewVisual.style.display = "none";
+      viewMermaid.style.display = "block";
+    };
+  }
+
+  // 5. Copy Mermaid Code button
+  var copyBtn = document.getElementById("btn-copy-mermaid");
+  if(copyBtn) {
+    copyBtn.onclick = function() {
+      var code = document.getElementById("mermaid-code");
+      if(code) {
+        navigator.clipboard.writeText(code.textContent).then(function() {
+          copyBtn.textContent = "Copied to clipboard!";
+          setTimeout(function(){ copyBtn.textContent = "Copy Mermaid Code"; }, 2000);
+        });
+      }
+    };
+  }
 })();`;
 var FILTER_HASH = "sha256-" + createHash2("sha256").update(FILTER_SCRIPT).digest("base64");
+function generateMermaidEr(m) {
+  const lines = ["erDiagram"];
+  for (const t of m.tables) {
+    lines.push(`    ${t.name} {`);
+    for (const c of t.columns) {
+      const typeClean = c.type.replace(/[^a-zA-Z0-9_]/g, "_");
+      const keyType = c.isPrimaryKey ? "PK" : c.isUnique ? "UK" : "";
+      lines.push(`        ${typeClean} ${c.name} ${keyType}`);
+    }
+    lines.push(`    }`);
+  }
+  for (const r of m.relationships) {
+    const fromT = r.from.replace(/^column:/, "").split(".")[0];
+    const toT = r.to.replace(/^column:/, "").split(".")[0];
+    let relSymbol = "||--o{";
+    if (r.cardinality === "one-to-one")
+      relSymbol = "||--||";
+    if (r.cardinality === "many-to-many")
+      relSymbol = "}o--o{";
+    lines.push(`    ${toT} ${relSymbol} ${fromT} : "${r.enforcement}"`);
+  }
+  return lines.join("\n");
+}
 function appSection(m) {
   const app = m.application;
   if (!app)
@@ -2069,6 +2178,7 @@ function appSection(m) {
   `;
 }
 function databaseHtml(m) {
+  const mermaidCode = generateMermaidEr(m);
   const tableCards = m.tables.map((t) => {
     return `
     <div class="table-card" id="${esc(t.name)}" data-table="${esc(t.name)}">
@@ -2099,8 +2209,8 @@ function databaseHtml(m) {
             <tr class="col-row ${isPk ? "row-pk" : ""}">
               <td class="col-name">
                 <span class="name-text">${esc(c.name)}</span>
-                ${isPk ? `<span class="tag tag-pk">PRIMARY KEY</span>` : ""}
-                ${isUq ? `<span class="tag tag-uq">UNIQUE</span>` : ""}
+                ${isPk ? `<span class="tag tag-pk" title="Primary Key: uniquely identifies each row">PRIMARY KEY</span>` : ""}
+                ${isUq ? `<span class="tag tag-uq" title="Unique Constraint: duplicate values not permitted">UNIQUE</span>` : ""}
               </td>
               <td class="col-type"><code>${esc(c.type)}</code></td>
               <td class="col-attrs">
@@ -2131,14 +2241,14 @@ function databaseHtml(m) {
         <div class="finding-title"><strong>${esc(f.category)}</strong></div>
         <p class="finding-desc">${esc(f.explanation)}</p>
         <div class="finding-recom">\u{1F4A1} ${esc(f.recommendation)}</div>
-      </div>`).join("") : `<div class="empty-state">No schema warnings or findings. Everything looks clean!</div>`;
+      </div>`).join("") : `<div class="empty-state">No schema warnings or findings. Everything looks clean and optimized!</div>`;
   return `<!doctype html>
 <html lang="en">
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
 <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src '${FILTER_HASH}'; img-src 'self' data:">
-<title>SchemaSage Database Report: ${esc(m.source.adapter)}</title>
+<title>SchemaSage Database Architecture &amp; ER Explorer</title>
 <style>
 :root {
   --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
@@ -2195,7 +2305,7 @@ body {
 header {
   background: var(--header-bg);
   border-bottom: 1px solid var(--line);
-  padding: 24px 32px;
+  padding: 20px 32px;
   position: sticky;
   top: 0;
   z-index: 100;
@@ -2268,6 +2378,48 @@ main {
   padding: 32px;
 }
 
+/* Learning Guide Banner */
+.learning-guide {
+  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(6, 182, 212, 0.08));
+  border: 1px solid rgba(59, 130, 246, 0.25);
+  border-radius: 14px;
+  padding: 20px 24px;
+  margin-bottom: 32px;
+  display: flex;
+  flex-direction: column;
+  gap: 12px;
+}
+.guide-header {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-weight: 700;
+  font-size: 15px;
+  color: var(--accent);
+}
+.guide-grid {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
+  gap: 16px;
+  font-size: 13px;
+}
+.guide-item {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 10px;
+  padding: 12px 16px;
+}
+.guide-item strong {
+  display: block;
+  margin-bottom: 4px;
+  color: var(--fg);
+}
+.guide-item p {
+  margin: 0;
+  color: var(--muted);
+  line-height: 1.4;
+}
+
 .stats-bar {
   display: grid;
   grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
@@ -2315,6 +2467,122 @@ main {
   gap: 8px;
 }
 
+/* Diagram Mode Switcher */
+.diagram-mode-bar {
+  display: flex;
+  align-items: center;
+  gap: 12px;
+  margin-bottom: 12px;
+}
+
+.tabs-ctrl {
+  display: inline-flex;
+  background: var(--card-head);
+  padding: 3px;
+  border-radius: 10px;
+  border: 1px solid var(--card-border);
+}
+
+.tab-btn {
+  background: transparent;
+  border: none;
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 14px;
+  border-radius: 7px;
+  cursor: pointer;
+  color: var(--muted);
+  transition: all 0.15s;
+}
+
+.tab-btn.active {
+  background: var(--card-bg);
+  color: var(--fg);
+  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
+}
+
+.zoom-bar {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.zoom-indicator {
+  font-size: 12px;
+  font-weight: 600;
+  color: var(--muted);
+  min-width: 45px;
+  text-align: center;
+}
+
+.btn-ctrl {
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  color: var(--fg);
+  font-size: 13px;
+  font-weight: 600;
+  padding: 6px 12px;
+  border-radius: 8px;
+  cursor: pointer;
+  transition: all 0.15s;
+}
+
+.btn-ctrl:hover {
+  background: var(--line);
+}
+
+.erd-wrap {
+  position: relative;
+  overflow: hidden;
+  max-height: 82vh;
+  min-height: 520px;
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  background: var(--canvas-bg);
+  padding: 16px;
+  cursor: grab;
+  box-shadow: inset 0 2px 6px rgba(0,0,0,0.02);
+}
+
+.erd-hint {
+  position: absolute;
+  bottom: 16px;
+  right: 16px;
+  background: rgba(0, 0, 0, 0.7);
+  color: #fff;
+  font-size: 11px;
+  padding: 6px 12px;
+  border-radius: 20px;
+  pointer-events: none;
+  z-index: 10;
+}
+
+/* Mermaid Code View */
+.mermaid-container {
+  display: none;
+  background: var(--card-bg);
+  border: 1px solid var(--card-border);
+  border-radius: 16px;
+  padding: 24px;
+}
+.mermaid-header {
+  display: flex;
+  justify-content: space-between;
+  align-items: center;
+  margin-bottom: 16px;
+}
+.mermaid-code-box {
+  background: var(--card-head);
+  border: 1px solid var(--line);
+  border-radius: 10px;
+  padding: 16px;
+  font-family: var(--mono);
+  font-size: 13px;
+  overflow: auto;
+  max-height: 600px;
+  white-space: pre;
+}
+
 .search-box {
   display: flex;
   align-items: center;
@@ -2336,27 +2604,6 @@ main {
   width: 100%;
 }
 
-.zoom-bar {
-  display: flex;
-  gap: 6px;
-}
-
-.btn-ctrl {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.btn-ctrl:hover {
-  background: var(--line);
-}
-
 .table-card {
   background: var(--card-bg);
   border: 1px solid var(--card-border);
@@ -2364,7 +2611,12 @@ main {
   margin-bottom: 24px;
   overflow: hidden;
   box-shadow: 0 2px 5px rgba(0,0,0,0.02);
-  transition: border-color 0.2s, box-shadow 0.2s;
+  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.5s;
+}
+
+.table-card.highlight-flash {
+  border-color: var(--accent);
+  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.35);
 }
 
 .table-card:hover {
@@ -2585,7 +2837,7 @@ ${ERD_CSS}
       </div>
     </div>
     <nav aria-label="Main Sections">
-      <a href="#erd">Diagram</a>
+      <a href="#erd">Diagrams</a>
       <a href="#tables">Tables (${m.tables.length})</a>
       <a href="#relationships">Relationships (${m.relationships.length})</a>
       <a href="#findings">Findings (${m.findings.length})</a>
@@ -2595,6 +2847,27 @@ ${ERD_CSS}
 </header>
 
 <main>
+  <!-- Educational & Interactive Quick-Guide -->
+  <div class="learning-guide">
+    <div class="guide-header">
+      <span>\u{1F4A1}</span> Quick Architectural Guide: Understanding This Database
+    </div>
+    <div class="guide-grid">
+      <div class="guide-item">
+        <strong>1. Solid vs. Dashed Lines</strong>
+        <p><span class="enforcement-badge db-enforced">Solid Line</span> = Enforced by DB Foreign Keys. <span class="enforcement-badge orm-declared">Dashed Line</span> = Declared at ORM level only.</p>
+      </div>
+      <div class="guide-item">
+        <strong>2. Interactive Table Focus</strong>
+        <p>Hover over any table box in the diagram to spotlight its connected relationships, or click it to jump straight to its schema details.</p>
+      </div>
+      <div class="guide-item">
+        <strong>3. Export to Mermaid &amp; Docs</strong>
+        <p>Toggle to the <strong>Mermaid ERD</strong> tab to copy raw diagram code for GitHub PRs, Markdown notes, or documentation.</p>
+      </div>
+    </div>
+  </div>
+
   <div class="stats-bar">
     <div class="stat-box">
       <div class="stat-label">Tables / Collections</div>
@@ -2615,22 +2888,43 @@ ${ERD_CSS}
   </div>
 
   <div class="section-head" id="erd">
-    <h2>Interactive Entity-Relationship Diagram</h2>
-    <div class="zoom-bar">
-      <button id="zoom-in" class="btn-ctrl" title="Zoom in">+</button>
-      <button id="zoom-out" class="btn-ctrl" title="Zoom out">-</button>
-      <button id="zoom-reset" class="btn-ctrl" title="Reset Zoom">Reset</button>
+    <h2>Entity-Relationship Diagrams</h2>
+    <div class="diagram-mode-bar">
+      <div class="tabs-ctrl">
+        <button id="tab-visual" class="tab-btn active">Visual Canvas</button>
+        <button id="tab-mermaid" class="tab-btn">Mermaid Code &amp; Export</button>
+      </div>
+      <div class="zoom-bar">
+        <button id="zoom-in" class="btn-ctrl" title="Zoom In">+</button>
+        <span id="zoom-indicator" class="zoom-indicator">100%</span>
+        <button id="zoom-out" class="btn-ctrl" title="Zoom Out">-</button>
+        <button id="zoom-reset" class="btn-ctrl" title="Reset View">Reset</button>
+      </div>
     </div>
   </div>
 
-  <div class="erd-wrap">
+  <!-- View 1: Visual Interactive SVG Canvas -->
+  <div id="view-visual" class="erd-wrap">
     ${erdSvg(m)}
+    <div class="erd-hint">Click &amp; drag canvas to pan &bull; Hover table to trace relations &bull; Click to view table card</div>
+  </div>
+
+  <!-- View 2: Mermaid ERD Syntax & Export View -->
+  <div id="view-mermaid" class="mermaid-container">
+    <div class="mermaid-header">
+      <div>
+        <strong>Mermaid.js Entity-Relationship Syntax</strong>
+        <div style="font-size: 12px; color: var(--muted);">Embed this directly in Markdown files or render in GitHub issues &amp; PRs.</div>
+      </div>
+      <button id="btn-copy-mermaid" class="btn-ctrl">Copy Mermaid Code</button>
+    </div>
+    <div id="mermaid-code" class="mermaid-code-box">${esc(mermaidCode)}</div>
   </div>
 
   <div class="section-head" id="tables">
     <h2>Tables &amp; Schemas (${m.tables.length})</h2>
     <div class="search-box">
-      <input id="filter" type="search" placeholder="Quick filter tables / columns..." autocomplete="off">
+      <input id="filter" type="search" placeholder="Filter tables or columns..." autocomplete="off">
     </div>
   </div>
 
@@ -2648,11 +2942,11 @@ ${ERD_CSS}
     <table class="modern-table">
       <thead>
         <tr>
-          <th>From</th>
+          <th>From Column</th>
           <th></th>
-          <th>To</th>
+          <th>To Column</th>
           <th>Cardinality</th>
-          <th>Enforcement</th>
+          <th>Enforcement Type</th>
         </tr>
       </thead>
       <tbody>
