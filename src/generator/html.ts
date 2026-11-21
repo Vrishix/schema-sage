@@ -3,25 +3,56 @@ import { erdSvg, ERD_CSS } from "./erd.js";
 import { esc } from "./escape.js";
 import { createHash } from "node:crypto";
 
-/** Filter, interactive diagram, pan/zoom, detail modal, and learning guide script. */
+/** Filter, interactive diagram, pan/zoom, detail modal, collapsible sidebar, and learning guide script. */
 export const FILTER_SCRIPT = `(function(){
-  // 1. Search & Filter
+  // 1. Search & Filter across table cards, ERD entities, and Sidebar links
   var filterInput = document.getElementById("filter");
-  if(filterInput) {
-    filterInput.addEventListener("input", function() {
-      var q = filterInput.value.trim().toLowerCase();
-      document.querySelectorAll(".table-card").forEach(function(card) {
-        var name = (card.getAttribute("data-table") || "").toLowerCase();
-        card.style.display = (q === "" || name.indexOf(q) >= 0) ? "" : "none";
-      });
-      document.querySelectorAll("g.entity").forEach(function(g) {
-        var name = (g.getAttribute("data-name") || "").toLowerCase();
-        g.style.display = (q === "" || name.indexOf(q) >= 0) ? "" : "none";
-      });
+  var sidebarFilter = document.getElementById("sidebar-filter");
+
+  function handleFilter(q) {
+    q = q.trim().toLowerCase();
+    document.querySelectorAll(".table-card").forEach(function(card) {
+      var name = (card.getAttribute("data-table") || "").toLowerCase();
+      card.style.display = (q === "" || name.indexOf(q) >= 0) ? "" : "none";
+    });
+    document.querySelectorAll("g.entity").forEach(function(g) {
+      var name = (g.getAttribute("data-name") || "").toLowerCase();
+      g.style.display = (q === "" || name.indexOf(q) >= 0) ? "" : "none";
+    });
+    document.querySelectorAll(".sidebar-table-item").forEach(function(item) {
+      var name = (item.getAttribute("data-name") || "").toLowerCase();
+      item.style.display = (q === "" || name.indexOf(q) >= 0) ? "" : "none";
     });
   }
 
-  // 2. Pan and Zoom controls for ERD
+  if(filterInput) {
+    filterInput.addEventListener("input", function() {
+      if(sidebarFilter) sidebarFilter.value = filterInput.value;
+      handleFilter(filterInput.value);
+    });
+  }
+  if(sidebarFilter) {
+    sidebarFilter.addEventListener("input", function() {
+      if(filterInput) filterInput.value = sidebarFilter.value;
+      handleFilter(sidebarFilter.value);
+    });
+  }
+
+  // 2. Sidebar Toggle (ChatGPT style slide out / in)
+  var sidebar = document.getElementById("sidebar");
+  var toggleBtn = document.getElementById("sidebar-toggle");
+  var overlay = document.getElementById("sidebar-overlay");
+
+  function toggleSidebar() {
+    if(!sidebar) return;
+    sidebar.classList.toggle("collapsed");
+    document.body.classList.toggle("sidebar-closed");
+  }
+
+  if(toggleBtn) toggleBtn.onclick = toggleSidebar;
+  if(overlay) overlay.onclick = toggleSidebar;
+
+  // 3. Pan and Zoom controls for ERD
   var currentScale = 1;
   var panX = 0, panY = 0;
   var isPanning = false;
@@ -82,7 +113,7 @@ export const FILTER_SCRIPT = `(function(){
     });
   }
 
-  // 3. Highlight connections on entity hover
+  // 4. Highlight connections on entity hover & click to jump
   document.querySelectorAll("g.entity").forEach(function(el) {
     var tableName = el.getAttribute("data-name");
     el.addEventListener("mouseenter", function() {
@@ -104,18 +135,33 @@ export const FILTER_SCRIPT = `(function(){
       });
     });
 
-    // Click on entity scrolls smoothly to its detailed table card
     el.addEventListener("click", function() {
-      var target = document.getElementById(tableName);
-      if(target) {
-        target.scrollIntoView({ behavior: "smooth", block: "center" });
-        target.classList.add("highlight-flash");
-        setTimeout(function(){ target.classList.remove("highlight-flash"); }, 2000);
-      }
+      jumpToTable(tableName);
     });
   });
 
-  // 4. Diagram View Mode Switcher (Visual ERD vs Mermaid Diagram)
+  // 5. Jump to Table Card with visual flash
+  window.jumpToTable = function(tableName) {
+    var target = document.getElementById(tableName);
+    if(target) {
+      target.scrollIntoView({ behavior: "smooth", block: "center" });
+      target.classList.add("highlight-flash");
+      setTimeout(function(){ target.classList.remove("highlight-flash"); }, 2000);
+      document.querySelectorAll(".sidebar-table-item").forEach(function(it) {
+        it.classList.toggle("active", (it.getAttribute("data-name") || "").toLowerCase() === tableName.toLowerCase());
+      });
+    }
+  };
+
+  document.querySelectorAll(".sidebar-table-item").forEach(function(item) {
+    item.addEventListener("click", function(e) {
+      e.preventDefault();
+      var tName = item.getAttribute("data-name");
+      jumpToTable(tName);
+    });
+  });
+
+  // 6. Diagram View Mode Switcher (Visual Canvas vs Mermaid Code)
   var tabVisual = document.getElementById("tab-visual");
   var tabMermaid = document.getElementById("tab-mermaid");
   var viewVisual = document.getElementById("view-visual");
@@ -136,7 +182,7 @@ export const FILTER_SCRIPT = `(function(){
     };
   }
 
-  // 5. Copy Mermaid Code button
+  // 7. Copy Mermaid Code
   var copyBtn = document.getElementById("btn-copy-mermaid");
   if(copyBtn) {
     copyBtn.onclick = function() {
@@ -154,7 +200,6 @@ export const FILTER_SCRIPT = `(function(){
 export const FILTER_HASH = "sha256-" + createHash("sha256").update(FILTER_SCRIPT).digest("base64");
 export { esc };
 
-/** Generates clean Mermaid ERD syntax from the DatabaseModel. */
 function generateMermaidEr(m: DatabaseModel): string {
   const lines: string[] = ["erDiagram"];
   for (const t of m.tables) {
@@ -170,7 +215,7 @@ function generateMermaidEr(m: DatabaseModel): string {
   for (const r of m.relationships) {
     const fromT = r.from.replace(/^column:/, "").split(".")[0];
     const toT = r.to.replace(/^column:/, "").split(".")[0];
-    let relSymbol = "||--o{"; // one to many
+    let relSymbol = "||--o{";
     if (r.cardinality === "one-to-one") relSymbol = "||--||";
     if (r.cardinality === "many-to-many") relSymbol = "}o--o{";
     lines.push(`    ${toT} ${relSymbol} ${fromT} : "${r.enforcement}"`);
@@ -243,8 +288,8 @@ export function databaseHtml(m: DatabaseModel): string {
             <tr class="col-row ${isPk ? "row-pk" : ""}">
               <td class="col-name">
                 <span class="name-text">${esc(c.name)}</span>
-                ${isPk ? `<span class="tag tag-pk" title="Primary Key: uniquely identifies each row">PRIMARY KEY</span>` : ""}
-                ${isUq ? `<span class="tag tag-uq" title="Unique Constraint: duplicate values not permitted">UNIQUE</span>` : ""}
+                ${isPk ? `<span class="tag tag-pk" title="Primary Key">PRIMARY KEY</span>` : ""}
+                ${isUq ? `<span class="tag tag-uq" title="Unique Constraint">UNIQUE</span>` : ""}
               </td>
               <td class="col-type"><code>${esc(c.type)}</code></td>
               <td class="col-attrs">
@@ -261,6 +306,13 @@ export function databaseHtml(m: DatabaseModel): string {
       </div>
     </div>`;
   }).join("");
+
+  const sidebarItems = m.tables.map((t) => `
+    <a href="#${esc(t.name)}" class="sidebar-table-item" data-name="${esc(t.name)}" title="${esc(t.name)} (${t.columns.length} columns)">
+      <span class="sidebar-item-name">${esc(t.name)}</span>
+      <span class="sidebar-item-count">${t.columns.length}</span>
+    </a>
+  `).join("");
 
   const relRows = m.relationships.map((r, idx) => `
     <tr id="rel-${idx}" class="rel-row">
@@ -308,6 +360,7 @@ export function databaseHtml(m: DatabaseModel): string {
   --dash: #d97706;
   --amber-light: #fef3c7;
   --header-bg: #ffffff;
+  --sidebar-w: 280px;
 }
 
 @media (prefers-color-scheme: dark) {
@@ -339,15 +392,129 @@ body {
   color: var(--fg);
   background: var(--bg);
   line-height: 1.6;
+  display: flex;
+}
+
+/* Sidebar (ChatGPT style) */
+#sidebar {
+  width: var(--sidebar-w);
+  height: 100vh;
+  position: sticky;
+  top: 0;
+  background: var(--card-bg);
+  border-right: 1px solid var(--line);
+  display: flex;
+  flex-direction: column;
+  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.25s cubic-bezier(0.16, 1, 0.3, 1);
+  z-index: 1000;
+  flex-shrink: 0;
+}
+
+#sidebar.collapsed {
+  margin-left: calc(-1 * var(--sidebar-w));
+}
+
+.sidebar-header {
+  padding: 18px 20px;
+  border-bottom: 1px solid var(--line);
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+}
+
+.sidebar-brand {
+  font-weight: 800;
+  font-size: 14px;
+  letter-spacing: 0.5px;
+  display: flex;
+  align-items: center;
+  gap: 8px;
+}
+
+.sidebar-search-box {
+  padding: 12px 16px;
+  border-bottom: 1px solid var(--line);
+}
+
+.sidebar-search-box input {
+  width: 100%;
+  background: var(--card-head);
+  border: 1px solid var(--line);
+  border-radius: 8px;
+  padding: 6px 12px;
+  font-size: 13px;
+  color: var(--fg);
+  outline: none;
+}
+
+.sidebar-search-box input:focus {
+  border-color: var(--accent);
+}
+
+.sidebar-list {
+  flex: 1;
+  overflow-y: auto;
+  padding: 8px;
+  display: flex;
+  flex-direction: column;
+  gap: 2px;
+}
+
+.sidebar-table-item {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  padding: 7px 12px;
+  border-radius: 8px;
+  color: var(--fg);
+  text-decoration: none;
+  font-size: 13px;
+  font-weight: 500;
+  transition: all 0.12s;
+  position: relative;
+}
+
+.sidebar-table-item:hover {
+  background: var(--card-head);
+  color: var(--accent);
+}
+
+.sidebar-table-item.active {
+  background: var(--accent-light);
+  color: var(--accent);
+  font-weight: 600;
+}
+
+.sidebar-item-name {
+  white-space: nowrap;
+  overflow: hidden;
+  text-overflow: ellipsis;
+  max-width: 190px;
+}
+
+.sidebar-item-count {
+  font-size: 11px;
+  background: var(--line);
+  padding: 1px 6px;
+  border-radius: 10px;
+  color: var(--muted);
+}
+
+/* App Main Container */
+.app-container {
+  flex: 1;
+  min-width: 0;
+  display: flex;
+  flex-direction: column;
 }
 
 header {
   background: var(--header-bg);
   border-bottom: 1px solid var(--line);
-  padding: 20px 32px;
+  padding: 16px 28px;
   position: sticky;
   top: 0;
-  z-index: 100;
+  z-index: 99;
   backdrop-filter: blur(8px);
 }
 
@@ -364,7 +531,25 @@ header {
 .brand-title {
   display: flex;
   align-items: center;
-  gap: 12px;
+  gap: 14px;
+}
+
+.sidebar-toggle-btn {
+  background: var(--card-bg);
+  border: 1px solid var(--line);
+  color: var(--fg);
+  padding: 6px 10px;
+  border-radius: 8px;
+  cursor: pointer;
+  display: flex;
+  align-items: center;
+  justify-content: center;
+  font-size: 15px;
+  transition: all 0.15s;
+}
+
+.sidebar-toggle-btn:hover {
+  background: var(--line);
 }
 
 .logo-badge {
@@ -378,7 +563,7 @@ header {
 }
 
 h1 {
-  font-size: 22px;
+  font-size: 20px;
   font-weight: 700;
   margin: 0;
   letter-spacing: -0.5px;
@@ -386,13 +571,13 @@ h1 {
 
 .sub {
   color: var(--muted);
-  font-size: 13px;
-  margin: 4px 0 0;
+  font-size: 12.5px;
+  margin: 2px 0 0;
 }
 
 nav {
   display: flex;
-  gap: 8px;
+  gap: 6px;
   flex-wrap: wrap;
 }
 
@@ -413,8 +598,9 @@ nav a:hover {
 
 main {
   max-width: 1400px;
+  width: 100%;
   margin: 0 auto;
-  padding: 32px;
+  padding: 28px 32px;
 }
 
 /* Learning Guide Banner */
@@ -422,8 +608,8 @@ main {
   background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(6, 182, 212, 0.08));
   border: 1px solid rgba(59, 130, 246, 0.25);
   border-radius: 14px;
-  padding: 20px 24px;
-  margin-bottom: 32px;
+  padding: 18px 24px;
+  margin-bottom: 28px;
   display: flex;
   flex-direction: column;
   gap: 12px;
@@ -433,7 +619,7 @@ main {
   align-items: center;
   gap: 8px;
   font-weight: 700;
-  font-size: 15px;
+  font-size: 14.5px;
   color: var(--accent);
 }
 .guide-grid {
@@ -506,7 +692,6 @@ main {
   gap: 8px;
 }
 
-/* Diagram Mode Switcher */
 .diagram-mode-bar {
   display: flex;
   align-items: center;
@@ -596,7 +781,6 @@ main {
   z-index: 10;
 }
 
-/* Mermaid Code View */
 .mermaid-container {
   display: none;
   background: var(--card-bg);
@@ -866,149 +1050,166 @@ ${ERD_CSS}
 </head>
 <body>
 
-<header>
-  <div class="header-container">
-    <div class="brand-title">
-      <span class="logo-badge">SCHEMASAGE</span>
-      <div>
-        <h1>Database Architecture</h1>
-        <div class="sub">Adapter: <strong>${esc(m.source.adapter)}</strong> &bull; Generated: ${new Date(m.generatedAt).toLocaleString()}</div>
+<!-- Left Collapsible Sidebar -->
+<aside id="sidebar">
+  <div class="sidebar-header">
+    <div class="sidebar-brand">
+      <span class="logo-badge" style="padding: 2px 7px; font-size: 11px;">TABLES</span>
+      <span>Catalog (${m.tables.length})</span>
+    </div>
+  </div>
+  <div class="sidebar-search-box">
+    <input id="sidebar-filter" type="search" placeholder="Find table..." autocomplete="off">
+  </div>
+  <div class="sidebar-list">
+    ${sidebarItems}
+  </div>
+</aside>
+
+<!-- App Right Content -->
+<div class="app-container">
+  <header>
+    <div class="header-container">
+      <div class="brand-title">
+        <button id="sidebar-toggle" class="sidebar-toggle-btn" title="Toggle Tables Sidebar">☰</button>
+        <span class="logo-badge">SCHEMASAGE</span>
+        <div>
+          <h1>Database Architecture</h1>
+          <div class="sub">Adapter: <strong>${esc(m.source.adapter)}</strong> &bull; Generated: ${new Date(m.generatedAt).toLocaleString()}</div>
+        </div>
+      </div>
+      <nav aria-label="Main Sections">
+        <a href="#erd">Diagrams</a>
+        <a href="#tables">Tables (${m.tables.length})</a>
+        <a href="#relationships">Relationships (${m.relationships.length})</a>
+        <a href="#findings">Findings (${m.findings.length})</a>
+        <a href="#coverage">Coverage</a>
+      </nav>
+    </div>
+  </header>
+
+  <main>
+    <div class="learning-guide">
+      <div class="guide-header">
+        <span>💡</span> Quick Architectural Guide: Understanding This Database
+      </div>
+      <div class="guide-grid">
+        <div class="guide-item">
+          <strong>1. Solid vs. Dashed Lines</strong>
+          <p><span class="enforcement-badge db-enforced">Solid Line</span> = Enforced by DB Foreign Keys. <span class="enforcement-badge orm-declared">Dashed Line</span> = Declared at ORM level only.</p>
+        </div>
+        <div class="guide-item">
+          <strong>2. Instant Sidebar Navigation</strong>
+          <p>Use the left sidebar (<strong>☰</strong>) to filter and click directly to any table card, avoiding endless scrolling.</p>
+        </div>
+        <div class="guide-item">
+          <strong>3. Export to Mermaid &amp; Docs</strong>
+          <p>Toggle to the <strong>Mermaid ERD</strong> tab to copy raw diagram code for GitHub PRs, Markdown notes, or documentation.</p>
+        </div>
       </div>
     </div>
-    <nav aria-label="Main Sections">
-      <a href="#erd">Diagrams</a>
-      <a href="#tables">Tables (${m.tables.length})</a>
-      <a href="#relationships">Relationships (${m.relationships.length})</a>
-      <a href="#findings">Findings (${m.findings.length})</a>
-      <a href="#coverage">Coverage</a>
-    </nav>
-  </div>
-</header>
 
-<main>
-  <!-- Educational & Interactive Quick-Guide -->
-  <div class="learning-guide">
-    <div class="guide-header">
-      <span>💡</span> Quick Architectural Guide: Understanding This Database
-    </div>
-    <div class="guide-grid">
-      <div class="guide-item">
-        <strong>1. Solid vs. Dashed Lines</strong>
-        <p><span class="enforcement-badge db-enforced">Solid Line</span> = Enforced by DB Foreign Keys. <span class="enforcement-badge orm-declared">Dashed Line</span> = Declared at ORM level only.</p>
+    <div class="stats-bar">
+      <div class="stat-box">
+        <div class="stat-label">Tables / Collections</div>
+        <div class="stat-value">${m.tables.length}</div>
       </div>
-      <div class="guide-item">
-        <strong>2. Interactive Table Focus</strong>
-        <p>Hover over any table box in the diagram to spotlight its connected relationships, or click it to jump straight to its schema details.</p>
+      <div class="stat-box">
+        <div class="stat-label">Total Columns</div>
+        <div class="stat-value">${m.tables.reduce((sum, t) => sum + t.columns.length, 0)}</div>
       </div>
-      <div class="guide-item">
-        <strong>3. Export to Mermaid &amp; Docs</strong>
-        <p>Toggle to the <strong>Mermaid ERD</strong> tab to copy raw diagram code for GitHub PRs, Markdown notes, or documentation.</p>
+      <div class="stat-box">
+        <div class="stat-label">Relationships</div>
+        <div class="stat-value">${m.relationships.length}</div>
+      </div>
+      <div class="stat-box">
+        <div class="stat-label">Adapter Engine</div>
+        <div class="stat-value" style="font-size: 18px; line-height: 38px;">${esc(m.source.adapter)}</div>
       </div>
     </div>
-  </div>
 
-  <div class="stats-bar">
-    <div class="stat-box">
-      <div class="stat-label">Tables / Collections</div>
-      <div class="stat-value">${m.tables.length}</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Total Columns</div>
-      <div class="stat-value">${m.tables.reduce((sum, t) => sum + t.columns.length, 0)}</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Relationships</div>
-      <div class="stat-value">${m.relationships.length}</div>
-    </div>
-    <div class="stat-box">
-      <div class="stat-label">Adapter Engine</div>
-      <div class="stat-value" style="font-size: 18px; line-height: 38px;">${esc(m.source.adapter)}</div>
-    </div>
-  </div>
-
-  <div class="section-head" id="erd">
-    <h2>Entity-Relationship Diagrams</h2>
-    <div class="diagram-mode-bar">
-      <div class="tabs-ctrl">
-        <button id="tab-visual" class="tab-btn active">Visual Canvas</button>
-        <button id="tab-mermaid" class="tab-btn">Mermaid Code &amp; Export</button>
-      </div>
-      <div class="zoom-bar">
-        <button id="zoom-in" class="btn-ctrl" title="Zoom In">+</button>
-        <span id="zoom-indicator" class="zoom-indicator">100%</span>
-        <button id="zoom-out" class="btn-ctrl" title="Zoom Out">-</button>
-        <button id="zoom-reset" class="btn-ctrl" title="Reset View">Reset</button>
+    <div class="section-head" id="erd">
+      <h2>Entity-Relationship Diagrams</h2>
+      <div class="diagram-mode-bar">
+        <div class="tabs-ctrl">
+          <button id="tab-visual" class="tab-btn active">Visual Canvas</button>
+          <button id="tab-mermaid" class="tab-btn">Mermaid Code &amp; Export</button>
+        </div>
+        <div class="zoom-bar">
+          <button id="zoom-in" class="btn-ctrl" title="Zoom In">+</button>
+          <span id="zoom-indicator" class="zoom-indicator">100%</span>
+          <button id="zoom-out" class="btn-ctrl" title="Zoom Out">-</button>
+          <button id="zoom-reset" class="btn-ctrl" title="Reset View">Reset</button>
+        </div>
       </div>
     </div>
-  </div>
 
-  <!-- View 1: Visual Interactive SVG Canvas -->
-  <div id="view-visual" class="erd-wrap">
-    ${erdSvg(m)}
-    <div class="erd-hint">Click &amp; drag canvas to pan &bull; Hover table to trace relations &bull; Click to view table card</div>
-  </div>
+    <div id="view-visual" class="erd-wrap">
+      ${erdSvg(m)}
+      <div class="erd-hint">Click &amp; drag canvas to pan &bull; Hover table to trace relations &bull; Click to view table card</div>
+    </div>
 
-  <!-- View 2: Mermaid ERD Syntax & Export View -->
-  <div id="view-mermaid" class="mermaid-container">
-    <div class="mermaid-header">
-      <div>
-        <strong>Mermaid.js Entity-Relationship Syntax</strong>
-        <div style="font-size: 12px; color: var(--muted);">Embed this directly in Markdown files or render in GitHub issues &amp; PRs.</div>
+    <div id="view-mermaid" class="mermaid-container">
+      <div class="mermaid-header">
+        <div>
+          <strong>Mermaid.js Entity-Relationship Syntax</strong>
+          <div style="font-size: 12px; color: var(--muted);">Embed this directly in Markdown files or render in GitHub issues &amp; PRs.</div>
+        </div>
+        <button id="btn-copy-mermaid" class="btn-ctrl">Copy Mermaid Code</button>
       </div>
-      <button id="btn-copy-mermaid" class="btn-ctrl">Copy Mermaid Code</button>
+      <div id="mermaid-code" class="mermaid-code-box">${esc(mermaidCode)}</div>
     </div>
-    <div id="mermaid-code" class="mermaid-code-box">${esc(mermaidCode)}</div>
-  </div>
 
-  <div class="section-head" id="tables">
-    <h2>Tables &amp; Schemas (${m.tables.length})</h2>
-    <div class="search-box">
-      <input id="filter" type="search" placeholder="Filter tables or columns..." autocomplete="off">
+    <div class="section-head" id="tables">
+      <h2>Tables &amp; Schemas (${m.tables.length})</h2>
+      <div class="search-box">
+        <input id="filter" type="search" placeholder="Filter tables or columns..." autocomplete="off">
+      </div>
     </div>
-  </div>
 
-  <div class="tables-container">
-    ${tableCards}
-  </div>
+    <div class="tables-container">
+      ${tableCards}
+    </div>
 
-  ${appSection(m)}
+    ${appSection(m)}
 
-  <div class="section-head" id="relationships">
-    <h2>Relationships (${m.relationships.length})</h2>
-  </div>
+    <div class="section-head" id="relationships">
+      <h2>Relationships (${m.relationships.length})</h2>
+    </div>
 
-  <div class="table-card">
-    <table class="modern-table">
-      <thead>
-        <tr>
-          <th>From Column</th>
-          <th></th>
-          <th>To Column</th>
-          <th>Cardinality</th>
-          <th>Enforcement Type</th>
-        </tr>
-      </thead>
-      <tbody>
-        ${relRows}
-      </tbody>
-    </table>
-  </div>
+    <div class="table-card">
+      <table class="modern-table">
+        <thead>
+          <tr>
+            <th>From Column</th>
+            <th></th>
+            <th>To Column</th>
+            <th>Cardinality</th>
+            <th>Enforcement Type</th>
+          </tr>
+        </thead>
+        <tbody>
+          ${relRows}
+        </tbody>
+      </table>
+    </div>
 
-  <div class="section-head" id="findings">
-    <h2>Schema Insights &amp; Findings (${m.findings.length})</h2>
-  </div>
-  ${findings}
+    <div class="section-head" id="findings">
+      <h2>Schema Insights &amp; Findings (${m.findings.length})</h2>
+    </div>
+    ${findings}
 
-  <div class="section-head" id="coverage">
-    <h2>Coverage &amp; Inspected Sources</h2>
-  </div>
-  <div class="table-card" style="padding: 20px;">
-    <p><strong>Files Scanned (${m.coverage.filesScanned.length}):</strong></p>
-    <p style="font-size: 12px; line-height: 1.8;">
-      ${m.coverage.filesScanned.map((f) => `<code>${esc(f)}</code>`).join(" ")}
-    </p>
-  </div>
-</main>
+    <div class="section-head" id="coverage">
+      <h2>Coverage &amp; Inspected Sources</h2>
+    </div>
+    <div class="table-card" style="padding: 20px;">
+      <p><strong>Files Scanned (${m.coverage.filesScanned.length}):</strong></p>
+      <p style="font-size: 12px; line-height: 1.8;">
+        ${m.coverage.filesScanned.map((f) => `<code>${esc(f)}</code>`).join(" ")}
+      </p>
+    </div>
+  </main>
+</div>
 
 <script>${FILTER_SCRIPT}</script>
 </body>
