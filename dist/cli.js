@@ -1990,7 +1990,7 @@ import { createHash as createHash2 } from "node:crypto";
 var FILTER_SCRIPT = `(function(){
   // 1. Search & Filter across table cards, ERD entities, and Sidebar links
   var filterInput = document.getElementById("filter");
-  var sidebarFilter = document.getElementById("sidebar-filter");
+  var sidebarFilter = document.getElementById("sidebarSearch");
 
   function handleFilter(q) {
     q = q.trim().toLowerCase();
@@ -2002,9 +2002,9 @@ var FILTER_SCRIPT = `(function(){
       var name = (g.getAttribute("data-name") || "").toLowerCase();
       g.style.display = (q === "" || name.indexOf(q) >= 0) ? "" : "none";
     });
-    document.querySelectorAll(".sidebar-table-item").forEach(function(item) {
-      var name = (item.getAttribute("data-name") || "").toLowerCase();
-      item.style.display = (q === "" || name.indexOf(q) >= 0) ? "" : "none";
+    document.querySelectorAll(".table-item").forEach(function(item) {
+      var name = (item.getAttribute("data-table") || "").toLowerCase();
+      item.style.display = (q === "" || name.indexOf(q) >= 0) ? "flex" : "none";
     });
   }
 
@@ -2021,17 +2021,16 @@ var FILTER_SCRIPT = `(function(){
     });
   }
 
-  // 2. Sidebar Toggle (ChatGPT style slide out / in)
+  // 2. Sidebar Toggle
   var sidebar = document.getElementById("sidebar");
-  var toggleBtn = document.getElementById("sidebar-toggle");
+  var menuToggle = document.getElementById("menuToggle");
 
   function toggleSidebar() {
     if(!sidebar) return;
     sidebar.classList.toggle("collapsed");
-    document.body.classList.toggle("sidebar-closed");
   }
 
-  if(toggleBtn) toggleBtn.onclick = toggleSidebar;
+  if(menuToggle) menuToggle.onclick = toggleSidebar;
 
   // 3. Pan and Zoom controls for ERD
   var currentScale = 1;
@@ -2039,13 +2038,13 @@ var FILTER_SCRIPT = `(function(){
   var isPanning = false;
   var startX = 0, startY = 0;
   var canvas = document.querySelector(".erd-canvas");
-  var wrap = document.querySelector(".erd-wrap");
+  var wrap = document.getElementById("visualCanvas");
 
   function applyTransform() {
     if(!canvas) return;
     canvas.style.transform = "translate(" + panX + "px, " + panY + "px) scale(" + currentScale + ")";
     canvas.style.transformOrigin = "top left";
-    var scaleIndicator = document.getElementById("zoom-indicator");
+    var scaleIndicator = document.getElementById("zoomLevel");
     if(scaleIndicator) scaleIndicator.textContent = Math.round(currentScale * 100) + "%";
   }
 
@@ -2060,9 +2059,9 @@ var FILTER_SCRIPT = `(function(){
     applyTransform();
   };
 
-  var btnIn = document.getElementById("zoom-in");
-  var btnOut = document.getElementById("zoom-out");
-  var btnReset = document.getElementById("zoom-reset");
+  var btnIn = document.getElementById("zoomIn");
+  var btnOut = document.getElementById("zoomOut");
+  var btnReset = document.getElementById("zoomReset");
   if(btnIn) btnIn.onclick = function(){ zoomErd(0.15); };
   if(btnOut) btnOut.onclick = function(){ zoomErd(-0.15); };
   if(btnReset) btnReset.onclick = function(){ resetZoom(); };
@@ -2099,7 +2098,7 @@ var FILTER_SCRIPT = `(function(){
 
   function showRelTooltip(e, fromT, toT, fromC, toC, card, enf, src) {
     if(!tooltip) return;
-    var badgeClass = enf === "db-enforced" ? "db-enforced" : "orm-declared";
+    var badgeClass = enf === "db-enforced" ? "solid" : "dashed";
     var enfText = enf === "db-enforced" ? "Database Enforced (Foreign Key)" : "ORM Declared (Application Virtual)";
     
     tooltip.innerHTML = 
@@ -2120,7 +2119,7 @@ var FILTER_SCRIPT = `(function(){
           '</div>' +
         '</div>' +
         '<div class="tt-meta">' +
-          '<div class="tt-meta-item"><strong>Enforcement:</strong> <span class="' + badgeClass + '">' + enfText + '</span></div>' +
+          '<div class="tt-meta-item"><strong>Enforcement:</strong> <span>' + enfText + '</span></div>' +
           (src ? '<div class="tt-meta-item"><strong>Source:</strong> <code>' + src + '</code></div>' : '') +
         '</div>' +
       '</div>';
@@ -2218,30 +2217,36 @@ var FILTER_SCRIPT = `(function(){
 
   // 6. Jump to Table Card with visual flash
   window.jumpToTable = function(tableName) {
-    var target = document.getElementById(tableName);
+    var target = document.getElementById(tableName + "-card") || document.getElementById(tableName);
     if(target) {
       target.scrollIntoView({ behavior: "smooth", block: "center" });
-      target.classList.add("highlight-flash");
-      setTimeout(function(){ target.classList.remove("highlight-flash"); }, 2000);
-      document.querySelectorAll(".sidebar-table-item").forEach(function(it) {
-        it.classList.toggle("active", (it.getAttribute("data-name") || "").toLowerCase() === tableName.toLowerCase());
+      target.style.transition = "border-color 0.3s, box-shadow 0.3s";
+      target.style.borderColor = "var(--accent-blue)";
+      target.style.boxShadow = "0 0 0 4px var(--accent-blue-soft)";
+      setTimeout(function(){
+        target.style.borderColor = "";
+        target.style.boxShadow = "";
+      }, 1500);
+
+      document.querySelectorAll(".table-item").forEach(function(it) {
+        it.classList.toggle("active", (it.getAttribute("data-table") || "").toLowerCase() === tableName.toLowerCase());
       });
     }
   };
 
-  document.querySelectorAll(".sidebar-table-item").forEach(function(item) {
+  document.querySelectorAll(".table-item").forEach(function(item) {
     item.addEventListener("click", function(e) {
       e.preventDefault();
-      var tName = item.getAttribute("data-name");
+      var tName = item.getAttribute("data-table");
       jumpToTable(tName);
     });
   });
 
   // 7. Diagram View Mode Switcher (Visual Canvas vs Mermaid Code)
-  var tabVisual = document.getElementById("tab-visual");
-  var tabMermaid = document.getElementById("tab-mermaid");
-  var viewVisual = document.getElementById("view-visual");
-  var viewMermaid = document.getElementById("view-mermaid");
+  var tabVisual = document.getElementById("viewVisualBtn");
+  var tabMermaid = document.getElementById("viewMermaidBtn");
+  var viewVisual = document.getElementById("visualCanvas");
+  var viewMermaid = document.getElementById("mermaidView");
 
   if(tabVisual && tabMermaid && viewVisual && viewMermaid) {
     tabVisual.onclick = function() {
@@ -2259,14 +2264,14 @@ var FILTER_SCRIPT = `(function(){
   }
 
   // 8. Copy Mermaid Code
-  var copyBtn = document.getElementById("btn-copy-mermaid");
+  var copyBtn = document.getElementById("copyMermaid");
   if(copyBtn) {
     copyBtn.onclick = function() {
-      var code = document.getElementById("mermaid-code");
+      var code = document.getElementById("mermaidCode");
       if(code) {
         navigator.clipboard.writeText(code.textContent).then(function() {
-          copyBtn.textContent = "Copied to clipboard!";
-          setTimeout(function(){ copyBtn.textContent = "Copy Mermaid Code"; }, 2000);
+          copyBtn.textContent = "Copied!";
+          setTimeout(function(){ copyBtn.textContent = "Copy"; }, 2000);
         });
       }
     };
@@ -2311,17 +2316,17 @@ function appSection(m) {
   const rows = [...byTable.entries()].sort((a, b) => a[0].localeCompare(b[0])).map(([t, e]) => `<tr><td><strong>${esc(t)}</strong></td><td>${e.read}</td><td>${e.write}</td><td>${e.delete}</td><td>${e.places.map((p) => `<code>${esc(p)}</code>`).join("<br>")}</td></tr>`).join("");
   const flows = app.flows.map((f) => `<tr><td><code>${esc(f.endpoint.method)} ${esc(f.endpoint.path)}</code></td><td>${esc(f.endpoint.handler)}<br><code>${esc(f.endpoint.file)}:${f.endpoint.line}</code></td><td>${f.chain.map((c) => esc(c.fn)).join(" \u2192 ")}</td><td>${f.operations.map((o) => `${esc(o.operation)} <strong>${esc(o.table)}</strong> <code>${esc(o.file)}:${o.line}</code>`).join("<br>")}${f.ambiguousCalls.length ? `<br><em>Not followed: ${f.ambiguousCalls.map(esc).join(", ")}</em>` : ""}</td></tr>`).join("");
   return `
-  <div class="section-head" id="usage">
+  <div class="section-header" id="usage">
     <h2>Application usage</h2>
   </div>
   <div class="table-card">
-    <table class="modern-table"><thead><tr><th>Table</th><th>Reads</th><th>Writes</th><th>Deletes</th><th>Where</th></tr></thead><tbody>${rows || "<tr><td colspan=5>No calls found.</td></tr>"}</tbody></table>
+    <table class="mini-table"><thead><tr><th>Table</th><th>Reads</th><th>Writes</th><th>Deletes</th><th>Where</th></tr></thead><tbody>${rows || "<tr><td colspan=5>No calls found.</td></tr>"}</tbody></table>
   </div>
-  <div class="section-head" id="flows">
+  <div class="section-header" id="flows">
     <h2>Flows</h2>
   </div>
   <div class="table-card">
-    <table class="modern-table"><thead><tr><th>Endpoint</th><th>Handler</th><th>Call Chain</th><th>Database Operations</th></tr></thead><tbody>${flows || "<tr><td colspan=4>No flows mapped.</td></tr>"}</tbody></table>
+    <table class="mini-table"><thead><tr><th>Endpoint</th><th>Handler</th><th>Call Chain</th><th>Database Operations</th></tr></thead><tbody>${flows || "<tr><td colspan=4>No flows mapped.</td></tr>"}</tbody></table>
   </div>
   `;
 }
@@ -2329,1055 +2334,999 @@ function databaseHtml(m) {
   const mermaidCode = generateMermaidEr(m);
   const tableCards = m.tables.map((t) => {
     return `
-    <div class="table-card" id="${esc(t.name)}" data-table="${esc(t.name)}">
-      <div class="table-header">
-        <div class="table-title">
-          <span class="table-badge">TABLE</span>
+    <div class="table-card" id="${esc(t.name)}-card" data-table="${esc(t.name)}">
+      <div class="table-card-header">
+        <div class="table-card-title">
+          <span class="icon-circle">\u2637</span>
           <h3>${esc(t.name)}</h3>
-          ${t.dbName && t.dbName !== t.name ? `<span class="db-mapped">mapped to <code>${esc(t.dbName)}</code></span>` : ""}
+          ${t.dbName && t.dbName !== t.name ? `<span class="col-badge" style="background:var(--bg-code); margin-left:8px;">mapped: ${esc(t.dbName)}</span>` : ""}
         </div>
-        <div class="column-count">${t.columns.length} columns</div>
+        <span class="col-badge">${t.columns.length} columns</span>
       </div>
-      <div class="table-body">
-        <table class="modern-table">
-          <thead>
-            <tr>
-              <th>Column</th>
-              <th>Type</th>
-              <th>Attributes</th>
-              <th>Source Evidence</th>
-            </tr>
-          </thead>
-          <tbody>
-          ${t.columns.map((c) => {
+      <table class="mini-table">
+        <thead>
+          <tr>
+            <th>Column</th>
+            <th>Type</th>
+            <th>Constraints</th>
+            <th>Source Evidence</th>
+          </tr>
+        </thead>
+        <tbody>
+        ${t.columns.map((c) => {
       const isPk = c.isPrimaryKey;
       const isUq = c.isUnique && !isPk;
       const isNull = c.nullable;
       return `
-            <tr class="col-row ${isPk ? "row-pk" : ""}">
-              <td class="col-name">
-                <span class="name-text">${esc(c.name)}</span>
-                ${isPk ? `<span class="tag tag-pk" title="Primary Key">PRIMARY KEY</span>` : ""}
-                ${isUq ? `<span class="tag tag-uq" title="Unique Constraint">UNIQUE</span>` : ""}
-              </td>
-              <td class="col-type"><code>${esc(c.type)}</code></td>
-              <td class="col-attrs">
-                <span class="attr-pill ${isNull ? "nullable" : "not-null"}">${isNull ? "nullable" : "not null"}</span>
-                ${c.default ? `<span class="attr-default">default: <code>${esc(c.default)}</code></span>` : ""}
-              </td>
-              <td class="col-source">
-                <code>${esc(c.evidence[0]?.file ?? "")}:${c.evidence[0]?.lines?.[0] ?? ""}</code>
-              </td>
-            </tr>`;
+          <tr>
+            <td style="font-weight:600;">
+              ${esc(c.name)}
+              ${isPk ? `<span class="tag tag-pk">PK</span>` : ""}
+              ${isUq ? `<span class="tag tag-uq">UQ</span>` : ""}
+            </td>
+            <td><code>${esc(c.type)}</code></td>
+            <td>
+              <span class="tag" style="background:${isNull ? "var(--bg-code)" : "rgba(13,148,136,0.12)"}; color:${isNull ? "var(--text-muted)" : "var(--accent-teal)"}">${isNull ? "nullable" : "not null"}</span>
+              ${c.default ? `<span style="font-size:11px; color:var(--text-muted); margin-left:6px;">default: <code>${esc(c.default)}</code></span>` : ""}
+            </td>
+            <td style="font-size:11px; color:var(--text-muted);">
+              <code>${esc(c.evidence[0]?.file ?? "")}:${c.evidence[0]?.lines?.[0] ?? ""}</code>
+            </td>
+          </tr>`;
     }).join("")}
-          </tbody>
-        </table>
-      </div>
+        </tbody>
+      </table>
     </div>`;
   }).join("");
-  const sidebarItems = m.tables.map((t) => `
-    <a href="#${esc(t.name)}" class="sidebar-table-item" data-name="${esc(t.name)}" title="${esc(t.name)} (${t.columns.length} columns)">
-      <span class="sidebar-item-name">${esc(t.name)}</span>
-      <span class="sidebar-item-count">${t.columns.length}</span>
+  const sidebarItems = m.tables.map((t, idx) => `
+    <a href="#${esc(t.name)}" class="table-item ${idx === 0 ? "active" : ""}" data-table="${esc(t.name)}">
+      <span>\u2637 ${esc(t.name)}</span>
+      <span class="count">${t.columns.length}</span>
     </a>
   `).join("");
   const relRows = m.relationships.map((r, idx) => `
-    <tr id="rel-${idx}" class="rel-row">
-      <td><code class="from-pill">${esc(r.from)}</code></td>
-      <td class="arrow-cell">\u2192</td>
-      <td><code class="to-pill">${esc(r.to)}</code></td>
-      <td><span class="cardinality-badge">${esc(r.cardinality)}</span></td>
-      <td><span class="enforcement-badge ${esc(r.enforcement)}">${esc(r.enforcement)}</span></td>
+    <tr id="rel-${idx}">
+      <td><code style="font-weight:600;">${esc(r.from)}</code></td>
+      <td style="text-align:center; color:var(--text-muted);">\u2192</td>
+      <td><code style="font-weight:600;">${esc(r.to)}</code></td>
+      <td><span class="tag tag-uq">${esc(r.cardinality)}</span></td>
+      <td><span class="tag ${r.enforcement === "db-enforced" ? "tag-fk" : "tag-uq"}" style="${r.enforcement === "db-enforced" ? "background:rgba(13,148,136,0.14); color:var(--accent-teal);" : "background:rgba(217,119,6,0.14); color:var(--accent-amber);"}">${esc(r.enforcement)}</span></td>
     </tr>
   `).join("");
   const findings = m.findings.length ? m.findings.map((f) => `
-      <div class="finding-card">
-        <div class="finding-title"><strong>${esc(f.category)}</strong></div>
-        <p class="finding-desc">${esc(f.explanation)}</p>
-        <div class="finding-recom">\u{1F4A1} ${esc(f.recommendation)}</div>
-      </div>`).join("") : `<div class="empty-state">No schema warnings or findings. Everything looks clean and optimized!</div>`;
-  return `<!doctype html>
+      <div class="stat-card" style="margin-bottom:12px; border-left:4px solid var(--accent-blue);">
+        <div style="font-weight:700; font-size:14px; margin-bottom:4px;">${esc(f.category)}</div>
+        <p style="font-size:13px; color:var(--text-secondary); margin:0 0 6px;">${esc(f.explanation)}</p>
+        <div style="font-size:12px; font-weight:500;">\u{1F4A1} ${esc(f.recommendation)}</div>
+      </div>`).join("") : `<div class="empty-findings">
+        <span style="color:var(--accent-teal); font-size:24px; margin-bottom:8px; display:block;">\u2714</span>
+        No issues detected \u2014 all schemas, relations, and primary keys are fully consistent.
+      </div>`;
+  return `<!DOCTYPE html>
 <html lang="en">
 <head>
-<meta charset="utf-8">
-<meta name="viewport" content="width=device-width, initial-scale=1">
-<meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src '${FILTER_HASH}'; img-src 'self' data:">
-<title>SchemaSage Database Architecture &amp; ER Explorer</title>
-<style>
-:root {
-  --font: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, Helvetica, Arial, sans-serif;
-  --mono: ui-monospace, SFMono-Regular, Menlo, Monaco, Consolas, monospace;
-  --bg: #f8fafc;
-  --canvas-bg: #f1f5f9;
-  --fg: #0f172a;
-  --muted: #64748b;
-  --line: #e2e8f0;
-  --card-bg: #ffffff;
-  --card-border: #e2e8f0;
-  --card-head: #f8fafc;
-  --accent: #3b82f6;
-  --accent-light: #eff6ff;
-  --accent-dark: #1d4ed8;
-  --accent-hover: #2563eb;
-  --solid: #0d9488;
-  --dash: #d97706;
-  --amber-light: #fef3c7;
-  --header-bg: #ffffff;
-  --sidebar-w: 280px;
-}
-
-@media (prefers-color-scheme: dark) {
-  :root {
-    --bg: #0b0f19;
-    --canvas-bg: #070a12;
-    --fg: #f1f5f9;
-    --muted: #94a3b8;
-    --line: #1e293b;
-    --card-bg: #111827;
-    --card-border: #1f2937;
-    --card-head: #172033;
-    --accent: #60a5fa;
-    --accent-light: #1e3a8a;
-    --accent-dark: #93c5fd;
-    --accent-hover: #3b82f6;
-    --solid: #2dd4bf;
-    --dash: #fbbf24;
-    --amber-light: #78350f;
-    --header-bg: #111827;
-  }
-}
-
-* { box-sizing: border-box; }
-body {
-  font-family: var(--font);
-  margin: 0;
-  padding: 0;
-  color: var(--fg);
-  background: var(--bg);
-  line-height: 1.6;
-  display: flex;
-}
-
-/* Sidebar */
-#sidebar {
-  width: var(--sidebar-w);
-  height: 100vh;
-  position: sticky;
-  top: 0;
-  background: var(--card-bg);
-  border-right: 1px solid var(--line);
-  display: flex;
-  flex-direction: column;
-  transition: transform 0.25s cubic-bezier(0.16, 1, 0.3, 1), margin-left 0.25s cubic-bezier(0.16, 1, 0.3, 1);
-  z-index: 1000;
-  flex-shrink: 0;
-}
-
-#sidebar.collapsed {
-  margin-left: calc(-1 * var(--sidebar-w));
-}
-
-.sidebar-header {
-  padding: 18px 20px;
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-}
-
-.sidebar-brand {
-  font-weight: 800;
-  font-size: 14px;
-  letter-spacing: 0.5px;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.sidebar-search-box {
-  padding: 12px 16px;
-  border-bottom: 1px solid var(--line);
-}
-
-.sidebar-search-box input {
-  width: 100%;
-  background: var(--card-head);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 6px 12px;
-  font-size: 13px;
-  color: var(--fg);
-  outline: none;
-}
-
-.sidebar-search-box input:focus {
-  border-color: var(--accent);
-}
-
-.sidebar-list {
-  flex: 1;
-  overflow-y: auto;
-  padding: 8px;
-  display: flex;
-  flex-direction: column;
-  gap: 2px;
-}
-
-.sidebar-table-item {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  padding: 7px 12px;
-  border-radius: 8px;
-  color: var(--fg);
-  text-decoration: none;
-  font-size: 13px;
-  font-weight: 500;
-  transition: all 0.12s;
-  position: relative;
-}
-
-.sidebar-table-item:hover {
-  background: var(--card-head);
-  color: var(--accent);
-}
-
-.sidebar-table-item.active {
-  background: var(--accent-light);
-  color: var(--accent);
-  font-weight: 600;
-}
-
-.sidebar-item-name {
-  white-space: nowrap;
-  overflow: hidden;
-  text-overflow: ellipsis;
-  max-width: 190px;
-}
-
-.sidebar-item-count {
-  font-size: 11px;
-  background: var(--line);
-  padding: 1px 6px;
-  border-radius: 10px;
-  color: var(--muted);
-}
-
-/* App Main Container */
-.app-container {
-  flex: 1;
-  min-width: 0;
-  display: flex;
-  flex-direction: column;
-}
-
-header {
-  background: var(--header-bg);
-  border-bottom: 1px solid var(--line);
-  padding: 16px 28px;
-  position: sticky;
-  top: 0;
-  z-index: 99;
-  backdrop-filter: blur(8px);
-}
-
-.header-container {
-  max-width: 1400px;
-  margin: 0 auto;
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-}
-
-.brand-title {
-  display: flex;
-  align-items: center;
-  gap: 14px;
-}
-
-.sidebar-toggle-btn {
-  background: var(--card-bg);
-  border: 1px solid var(--line);
-  color: var(--fg);
-  padding: 6px 10px;
-  border-radius: 8px;
-  cursor: pointer;
-  display: flex;
-  align-items: center;
-  justify-content: center;
-  font-size: 15px;
-  transition: all 0.15s;
-}
-
-.sidebar-toggle-btn:hover {
-  background: var(--line);
-}
-
-.logo-badge {
-  background: linear-gradient(135deg, #3b82f6, #06b6d4);
-  color: #fff;
-  font-weight: 800;
-  padding: 4px 10px;
-  border-radius: 8px;
-  font-size: 13px;
-  letter-spacing: 0.5px;
-}
-
-h1 {
-  font-size: 20px;
-  font-weight: 700;
-  margin: 0;
-  letter-spacing: -0.5px;
-}
-
-.sub {
-  color: var(--muted);
-  font-size: 12.5px;
-  margin: 2px 0 0;
-}
-
-nav {
-  display: flex;
-  gap: 6px;
-  flex-wrap: wrap;
-}
-
-nav a {
-  color: var(--muted);
-  text-decoration: none;
-  font-weight: 600;
-  font-size: 13px;
-  padding: 6px 12px;
-  border-radius: 8px;
-  transition: all 0.15s;
-}
-
-nav a:hover {
-  color: var(--fg);
-  background: var(--line);
-}
-
-main {
-  max-width: 1400px;
-  width: 100%;
-  margin: 0 auto;
-  padding: 28px 32px;
-}
-
-/* Learning Guide Banner */
-.learning-guide {
-  background: linear-gradient(135deg, rgba(59, 130, 246, 0.08), rgba(6, 182, 212, 0.08));
-  border: 1px solid rgba(59, 130, 246, 0.25);
-  border-radius: 14px;
-  padding: 18px 24px;
-  margin-bottom: 28px;
-  display: flex;
-  flex-direction: column;
-  gap: 12px;
-}
-.guide-header {
-  display: flex;
-  align-items: center;
-  gap: 8px;
-  font-weight: 700;
-  font-size: 14.5px;
-  color: var(--accent);
-}
-.guide-grid {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(260px, 1fr));
-  gap: 16px;
-  font-size: 13px;
-}
-.guide-item {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 10px;
-  padding: 12px 16px;
-}
-.guide-item strong {
-  display: block;
-  margin-bottom: 4px;
-  color: var(--fg);
-}
-.guide-item p {
-  margin: 0;
-  color: var(--muted);
-  line-height: 1.4;
-}
-
-.stats-bar {
-  display: grid;
-  grid-template-columns: repeat(auto-fit, minmax(180px, 1fr));
-  gap: 16px;
-  margin-bottom: 32px;
-}
-
-.stat-box {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  padding: 16px 20px;
-  border-radius: 12px;
-  box-shadow: 0 1px 3px rgba(0,0,0,0.03);
-}
-
-.stat-label {
-  font-size: 12px;
-  color: var(--muted);
-  text-transform: uppercase;
-  font-weight: 600;
-  letter-spacing: 0.5px;
-}
-
-.stat-value {
-  font-size: 26px;
-  font-weight: 800;
-  margin-top: 4px;
-}
-
-.section-head {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 16px;
-  margin: 40px 0 16px;
-}
-
-.section-head h2 {
-  font-size: 19px;
-  font-weight: 700;
-  margin: 0;
-  display: flex;
-  align-items: center;
-  gap: 8px;
-}
-
-.diagram-mode-bar {
-  display: flex;
-  align-items: center;
-  gap: 12px;
-  margin-bottom: 12px;
-}
-
-.tabs-ctrl {
-  display: inline-flex;
-  background: var(--card-head);
-  padding: 3px;
-  border-radius: 10px;
-  border: 1px solid var(--card-border);
-}
-
-.tab-btn {
-  background: transparent;
-  border: none;
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 14px;
-  border-radius: 7px;
-  cursor: pointer;
-  color: var(--muted);
-  transition: all 0.15s;
-}
-
-.tab-btn.active {
-  background: var(--card-bg);
-  color: var(--fg);
-  box-shadow: 0 1px 3px rgba(0,0,0,0.08);
-}
-
-.zoom-bar {
-  display: flex;
-  align-items: center;
-  gap: 6px;
-}
-
-.zoom-indicator {
-  font-size: 12px;
-  font-weight: 600;
-  color: var(--muted);
-  min-width: 45px;
-  text-align: center;
-}
-
-.btn-ctrl {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  color: var(--fg);
-  font-size: 13px;
-  font-weight: 600;
-  padding: 6px 12px;
-  border-radius: 8px;
-  cursor: pointer;
-  transition: all 0.15s;
-}
-
-.btn-ctrl:hover {
-  background: var(--line);
-}
-
-.erd-wrap {
-  position: relative;
-  overflow: hidden;
-  max-height: 82vh;
-  min-height: 520px;
-  border: 1px solid var(--card-border);
-  border-radius: 16px;
-  background: var(--canvas-bg);
-  padding: 16px;
-  cursor: grab;
-  box-shadow: inset 0 2px 6px rgba(0,0,0,0.02);
-}
-
-.erd-hint {
-  position: absolute;
-  bottom: 16px;
-  right: 16px;
-  background: rgba(0, 0, 0, 0.7);
-  color: #fff;
-  font-size: 11px;
-  padding: 6px 12px;
-  border-radius: 20px;
-  pointer-events: none;
-  z-index: 10;
-}
-
-/* Archify-Style Floating Tooltip */
-#rel-tooltip {
-  display: none;
-  position: fixed;
-  z-index: 2000;
-  pointer-events: none;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  box-shadow: 0 12px 32px rgba(0, 0, 0, 0.18), 0 2px 6px rgba(0, 0, 0, 0.08);
-  border-radius: 12px;
-  padding: 14px 18px;
-  width: 310px;
-  max-width: 90vw;
-  backdrop-filter: blur(12px);
-  animation: popIn 0.12s cubic-bezier(0.16, 1, 0.3, 1);
-}
-
-@keyframes popIn {
-  from { opacity: 0; transform: scale(0.96) translateY(4px); }
-  to { opacity: 1; transform: scale(1) translateY(0); }
-}
-
-.tt-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  border-bottom: 1px solid var(--line);
-  padding-bottom: 8px;
-  margin-bottom: 10px;
-}
-
-.tt-title {
-  font-size: 12px;
-  font-weight: 700;
-  color: var(--muted);
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-}
-
-.tt-badge {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 2px 7px;
-  border-radius: 6px;
-}
-
-.tt-badge.db-enforced {
-  background: rgba(13, 148, 136, 0.14);
-  color: var(--solid);
-}
-
-.tt-badge.orm-declared {
-  background: rgba(217, 119, 6, 0.14);
-  color: var(--dash);
-}
-
-.tt-flow {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  background: var(--card-head);
-  border: 1px solid var(--line);
-  border-radius: 8px;
-  padding: 8px 12px;
-  margin-bottom: 10px;
-}
-
-.tt-endpoint {
-  display: flex;
-  flex-direction: column;
-}
-
-.tt-table {
-  font-weight: 700;
-  font-size: 13px;
-}
-
-.tt-col {
-  font-family: var(--mono);
-  font-size: 11px;
-  color: var(--accent);
-}
-
-.tt-arrow {
-  color: var(--muted);
-  font-size: 15px;
-}
-
-.tt-meta {
-  font-size: 12px;
-  color: var(--muted);
-  display: flex;
-  flex-direction: column;
-  gap: 4px;
-}
-
-.tt-meta-item strong {
-  color: var(--fg);
-}
-
-.mermaid-container {
-  display: none;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 16px;
-  padding: 24px;
-}
-.mermaid-header {
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-  margin-bottom: 16px;
-}
-.mermaid-code-box {
-  background: var(--card-head);
-  border: 1px solid var(--line);
-  border-radius: 10px;
-  padding: 16px;
-  font-family: var(--mono);
-  font-size: 13px;
-  overflow: auto;
-  max-height: 600px;
-  white-space: pre;
-}
-
-.search-box {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  padding: 6px 14px;
-  border-radius: 10px;
-  width: 100%;
-  max-width: 320px;
-}
-
-.search-box input {
-  border: none;
-  background: transparent;
-  outline: none;
-  color: var(--fg);
-  font-size: 14px;
-  width: 100%;
-}
-
-.table-card {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-radius: 14px;
-  margin-bottom: 24px;
-  overflow: hidden;
-  box-shadow: 0 2px 5px rgba(0,0,0,0.02);
-  transition: border-color 0.2s, box-shadow 0.2s, background-color 0.5s;
-}
-
-.table-card.highlight-flash {
-  border-color: var(--accent);
-  box-shadow: 0 0 0 3px rgba(59, 130, 246, 0.35);
-}
-
-.table-card:hover {
-  border-color: var(--accent);
-  box-shadow: 0 6px 18px rgba(0,0,0,0.05);
-}
-
-.table-header {
-  padding: 16px 20px;
-  background: var(--card-head);
-  border-bottom: 1px solid var(--line);
-  display: flex;
-  justify-content: space-between;
-  align-items: center;
-}
-
-.table-title {
-  display: flex;
-  align-items: center;
-  gap: 10px;
-}
-
-.table-badge {
-  background: var(--line);
-  color: var(--muted);
-  font-size: 10px;
-  font-weight: 700;
-  padding: 3px 6px;
-  border-radius: 4px;
-}
-
-.table-title h3 {
-  margin: 0;
-  font-size: 16px;
-  font-weight: 700;
-}
-
-.db-mapped {
-  font-size: 12px;
-  color: var(--muted);
-}
-
-.column-count {
-  font-size: 12px;
-  color: var(--muted);
-  font-weight: 500;
-}
-
-.modern-table {
-  width: 100%;
-  border-collapse: collapse;
-  font-size: 13px;
-  text-align: left;
-}
-
-.modern-table th {
-  padding: 10px 16px;
-  background: var(--card-head);
-  color: var(--muted);
-  font-weight: 600;
-  font-size: 11px;
-  text-transform: uppercase;
-  letter-spacing: 0.5px;
-  border-bottom: 1px solid var(--line);
-}
-
-.modern-table td {
-  padding: 10px 16px;
-  border-bottom: 1px solid var(--line);
-  vertical-align: middle;
-}
-
-.modern-table tr:last-child td {
-  border-bottom: none;
-}
-
-.modern-table tr:hover {
-  background: rgba(59, 130, 246, 0.03);
-}
-
-.name-text {
-  font-weight: 600;
-  font-family: var(--mono);
-}
-
-.tag {
-  display: inline-block;
-  font-size: 9px;
-  font-weight: 700;
-  padding: 2px 5px;
-  border-radius: 4px;
-  margin-left: 6px;
-  vertical-align: middle;
-}
-
-.tag-pk {
-  background: var(--accent-light);
-  color: var(--accent);
-}
-
-.tag-uq {
-  background: var(--amber-light);
-  color: var(--dash);
-}
-
-code {
-  font-family: var(--mono);
-  font-size: 12px;
-  background: var(--line);
-  padding: 2px 6px;
-  border-radius: 5px;
-}
-
-.attr-pill {
-  font-size: 11px;
-  font-weight: 500;
-  padding: 2px 7px;
-  border-radius: 10px;
-}
-
-.attr-pill.not-null {
-  background: rgba(13, 148, 136, 0.12);
-  color: var(--solid);
-}
-
-.attr-pill.nullable {
-  background: rgba(100, 116, 139, 0.12);
-  color: var(--muted);
-}
-
-.attr-default {
-  font-size: 11px;
-  color: var(--muted);
-  margin-left: 8px;
-}
-
-.from-pill, .to-pill {
-  font-weight: 600;
-}
-
-.arrow-cell {
-  color: var(--muted);
-  font-size: 16px;
-  text-align: center;
-}
-
-.cardinality-badge {
-  background: var(--line);
-  font-size: 11px;
-  font-weight: 600;
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.enforcement-badge {
-  font-size: 11px;
-  font-weight: 700;
-  padding: 3px 8px;
-  border-radius: 6px;
-}
-
-.enforcement-badge.db-enforced {
-  background: rgba(13, 148, 136, 0.12);
-  color: var(--solid);
-}
-
-.enforcement-badge.orm-declared {
-  background: rgba(217, 119, 6, 0.12);
-  color: var(--dash);
-}
-
-.finding-card {
-  background: var(--card-bg);
-  border: 1px solid var(--card-border);
-  border-left: 4px solid var(--accent);
-  padding: 16px;
-  border-radius: 8px;
-  margin-bottom: 12px;
-}
-
-.finding-title {
-  font-size: 14px;
-  margin-bottom: 4px;
-}
-
-.finding-desc {
-  font-size: 13px;
-  color: var(--muted);
-  margin: 0 0 8px;
-}
-
-.finding-recom {
-  font-size: 12px;
-  font-weight: 500;
-}
-
-.empty-state {
-  padding: 32px;
-  text-align: center;
-  color: var(--muted);
-  background: var(--card-bg);
-  border: 1px dashed var(--line);
-  border-radius: 12px;
-}
-
-${ERD_CSS}
-</style>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <meta http-equiv="Content-Security-Policy" content="default-src 'none'; style-src 'unsafe-inline'; script-src '${FILTER_HASH}'; img-src 'self' data:">
+  <title>SchemaSage \xB7 Architecture &amp; ER Explorer</title>
+  <style>
+    * {
+      margin: 0;
+      padding: 0;
+      box-sizing: border-box;
+    }
+
+    :root {
+      --font-sans: 'Inter', -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto, Helvetica, Arial, sans-serif;
+      --font-mono: 'SF Mono', 'Fira Code', 'Cascadia Code', 'Consolas', monospace;
+
+      --bg-body: #f7f9fc;
+      --bg-surface: #ffffff;
+      --bg-sidebar: #ffffff;
+      --bg-canvas: #f0f4fa;
+      --bg-hover: #eef2f6;
+      --bg-code: #f1f5f9;
+
+      --text-primary: #0b1b33;
+      --text-secondary: #4b5e77;
+      --text-muted: #7a8ba0;
+
+      --border-light: #e2e9f2;
+      --border-focus: #3b82f6;
+
+      --accent-blue: #2563eb;
+      --accent-blue-soft: #dbeafe;
+      --accent-teal: #0d9488;
+      --accent-amber: #d97706;
+      --accent-rose: #e11d48;
+
+      --shadow-sm: 0 2px 6px rgba(0, 0, 0, 0.02), 0 1px 2px rgba(0, 0, 0, 0.03);
+      --shadow-md: 0 8px 20px -6px rgba(0, 20, 40, 0.08);
+      --radius-lg: 18px;
+      --radius-md: 12px;
+      --radius-sm: 8px;
+
+      --sidebar-width: 270px;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      :root {
+        --bg-body: #0b1018;
+        --bg-surface: #121a26;
+        --bg-sidebar: #0f1621;
+        --bg-canvas: #0a111c;
+        --bg-hover: #1a2535;
+        --bg-code: #1a2332;
+
+        --text-primary: #edf2f9;
+        --text-secondary: #a7bbd4;
+        --text-muted: #6a7f9b;
+
+        --border-light: #1f2c3d;
+        --border-focus: #60a5fa;
+
+        --accent-blue: #60a5fa;
+        --accent-blue-soft: #1e3a5f;
+        --accent-teal: #2dd4bf;
+        --accent-amber: #fbbf24;
+        --accent-rose: #fb7185;
+
+        --shadow-sm: 0 2px 8px rgba(0, 0, 0, 0.4);
+        --shadow-md: 0 12px 24px -8px rgba(0, 0, 0, 0.6);
+      }
+    }
+
+    body {
+      font-family: var(--font-sans);
+      background: var(--bg-body);
+      color: var(--text-primary);
+      line-height: 1.5;
+      display: flex;
+      min-height: 100vh;
+    }
+
+    /* Sidebar */
+    .sidebar {
+      width: var(--sidebar-width);
+      background: var(--bg-sidebar);
+      border-right: 1px solid var(--border-light);
+      display: flex;
+      flex-direction: column;
+      height: 100vh;
+      position: sticky;
+      top: 0;
+      transition: transform 0.2s ease, margin-right 0.2s ease;
+      z-index: 20;
+      flex-shrink: 0;
+    }
+
+    .sidebar.collapsed {
+      transform: translateX(calc(-1 * var(--sidebar-width)));
+      margin-right: calc(-1 * var(--sidebar-width));
+    }
+
+    .sidebar-header {
+      padding: 20px 16px 12px;
+      border-bottom: 1px solid var(--border-light);
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+    }
+
+    .logo-badge {
+      font-weight: 800;
+      font-size: 13px;
+      background: linear-gradient(135deg, var(--accent-blue), #06b6d4);
+      -webkit-background-clip: text;
+      -webkit-text-fill-color: transparent;
+      letter-spacing: -0.3px;
+    }
+
+    .sidebar-search {
+      padding: 14px 12px 10px;
+    }
+
+    .sidebar-search input {
+      width: 100%;
+      padding: 8px 12px;
+      border: 1px solid var(--border-light);
+      border-radius: 40px;
+      background: var(--bg-code);
+      font-size: 13px;
+      color: var(--text-primary);
+      outline: none;
+      transition: border 0.15s, box-shadow 0.15s;
+    }
+
+    .sidebar-search input:focus {
+      border-color: var(--border-focus);
+      box-shadow: 0 0 0 3px var(--accent-blue-soft);
+    }
+
+    .sidebar-list {
+      flex: 1;
+      overflow-y: auto;
+      padding: 8px 8px 20px;
+      display: flex;
+      flex-direction: column;
+      gap: 2px;
+    }
+
+    .table-item {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      padding: 8px 12px;
+      border-radius: var(--radius-sm);
+      color: var(--text-secondary);
+      font-size: 13px;
+      font-weight: 500;
+      text-decoration: none;
+      transition: all 0.1s;
+      white-space: nowrap;
+    }
+
+    .table-item:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    .table-item.active {
+      background: var(--accent-blue-soft);
+      color: var(--accent-blue);
+      font-weight: 600;
+    }
+
+    .table-item .count {
+      font-size: 11px;
+      background: var(--border-light);
+      padding: 1px 7px;
+      border-radius: 20px;
+      color: var(--text-muted);
+      font-weight: 500;
+      margin-left: 8px;
+    }
+
+    /* Main Area */
+    .main-wrapper {
+      flex: 1;
+      display: flex;
+      flex-direction: column;
+      min-width: 0;
+    }
+
+    .top-bar {
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-light);
+      padding: 12px 24px;
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      flex-wrap: wrap;
+      gap: 12px;
+      position: sticky;
+      top: 0;
+      z-index: 15;
+      backdrop-filter: blur(8px);
+    }
+
+    .brand-area {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+    }
+
+    .menu-toggle {
+      background: transparent;
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-sm);
+      padding: 6px 10px;
+      font-size: 16px;
+      cursor: pointer;
+      color: var(--text-primary);
+      transition: background 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .menu-toggle:hover {
+      background: var(--bg-hover);
+    }
+
+    .title-block h1 {
+      font-size: 18px;
+      font-weight: 700;
+      letter-spacing: -0.3px;
+      line-height: 1.3;
+    }
+
+    .subtitle {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      align-items: center;
+      gap: 6px;
+      margin-top: 2px;
+    }
+
+    .subtitle span {
+      background: var(--bg-code);
+      padding: 1px 6px;
+      border-radius: 6px;
+      font-family: var(--font-mono);
+      font-size: 11px;
+    }
+
+    .nav-links {
+      display: flex;
+      gap: 4px;
+      flex-wrap: wrap;
+    }
+
+    .nav-links a {
+      color: var(--text-secondary);
+      text-decoration: none;
+      font-size: 13px;
+      font-weight: 500;
+      padding: 6px 12px;
+      border-radius: 40px;
+      transition: background 0.1s, color 0.1s;
+    }
+
+    .nav-links a:hover {
+      background: var(--bg-hover);
+      color: var(--text-primary);
+    }
+
+    main {
+      flex: 1;
+      padding: 24px 28px 48px;
+      max-width: 1440px;
+      margin: 0 auto;
+      width: 100%;
+    }
+
+    /* Guide banner */
+    .guide-banner {
+      background: linear-gradient(105deg, var(--accent-blue-soft) 0%, transparent 90%);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 18px 24px;
+      margin-bottom: 28px;
+      display: flex;
+      flex-wrap: wrap;
+      align-items: center;
+      gap: 24px;
+    }
+
+    .guide-banner .guide-icon {
+      font-size: 26px;
+      color: var(--accent-blue);
+    }
+
+    .guide-text {
+      flex: 1;
+      font-size: 13.5px;
+      color: var(--text-secondary);
+    }
+
+    .guide-text strong {
+      color: var(--text-primary);
+      font-weight: 600;
+    }
+
+    .guide-badge {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      border-radius: 40px;
+      padding: 6px 14px;
+      font-size: 12px;
+      font-weight: 500;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+      white-space: nowrap;
+    }
+
+    .dot {
+      width: 8px;
+      height: 8px;
+      border-radius: 50%;
+      display: inline-block;
+    }
+    .dot.green { background: var(--accent-teal); }
+    .dot.amber { background: var(--accent-amber); }
+
+    /* Stats row */
+    .stats-row {
+      display: grid;
+      grid-template-columns: repeat(auto-fit, minmax(150px, 1fr));
+      gap: 16px;
+      margin-bottom: 32px;
+    }
+
+    .stat-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      padding: 16px 18px;
+      box-shadow: var(--shadow-sm);
+    }
+
+    .stat-label {
+      font-size: 11px;
+      text-transform: uppercase;
+      letter-spacing: 0.6px;
+      color: var(--text-muted);
+      font-weight: 600;
+      margin-bottom: 6px;
+    }
+
+    .stat-value {
+      font-size: 26px;
+      font-weight: 800;
+      letter-spacing: -0.5px;
+      line-height: 1.1;
+    }
+
+    .stat-value small {
+      font-size: 13px;
+      font-weight: 500;
+      color: var(--text-muted);
+      margin-left: 6px;
+    }
+
+    /* Diagram Section */
+    .section-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      flex-wrap: wrap;
+      gap: 12px;
+      margin: 32px 0 16px;
+    }
+
+    .section-header h2 {
+      font-size: 17px;
+      font-weight: 700;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .diagram-controls {
+      display: flex;
+      align-items: center;
+      gap: 12px;
+      flex-wrap: wrap;
+    }
+
+    .view-tabs {
+      display: flex;
+      background: var(--bg-code);
+      border-radius: 40px;
+      padding: 3px;
+      border: 1px solid var(--border-light);
+    }
+
+    .view-tabs button {
+      background: transparent;
+      border: none;
+      font-size: 12px;
+      font-weight: 600;
+      padding: 5px 14px;
+      border-radius: 30px;
+      cursor: pointer;
+      color: var(--text-secondary);
+      transition: all 0.1s;
+    }
+
+    .view-tabs button.active {
+      background: var(--bg-surface);
+      color: var(--text-primary);
+      box-shadow: 0 1px 4px rgba(0, 0, 0, 0.04);
+    }
+
+    .zoom-controls {
+      display: flex;
+      align-items: center;
+      gap: 4px;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      border-radius: 40px;
+      padding: 2px;
+    }
+
+    .zoom-controls button {
+      background: transparent;
+      border: none;
+      width: 28px;
+      height: 28px;
+      border-radius: 50%;
+      font-size: 14px;
+      font-weight: 600;
+      color: var(--text-secondary);
+      cursor: pointer;
+      transition: background 0.1s;
+      display: flex;
+      align-items: center;
+      justify-content: center;
+    }
+
+    .zoom-controls button:hover {
+      background: var(--bg-hover);
+    }
+
+    .zoom-level {
+      font-size: 11px;
+      font-weight: 600;
+      color: var(--text-muted);
+      min-width: 40px;
+      text-align: center;
+    }
+
+    .canvas-wrapper {
+      background: var(--bg-canvas);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 20px;
+      overflow: hidden;
+      max-height: 580px;
+      min-height: 520px;
+      box-shadow: inset 0 1px 4px rgba(0, 0, 0, 0.02);
+      cursor: grab;
+      position: relative;
+    }
+
+    .erd-canvas {
+      display: block;
+      transition: transform 0.15s ease;
+      transform-origin: top left;
+    }
+
+    /* Archify-Style Floating Tooltip */
+    #rel-tooltip {
+      display: none;
+      position: fixed;
+      z-index: 2000;
+      pointer-events: none;
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      box-shadow: var(--shadow-md);
+      border-radius: var(--radius-md);
+      padding: 14px 18px;
+      width: 320px;
+      max-width: 90vw;
+      backdrop-filter: blur(12px);
+      animation: popIn 0.12s cubic-bezier(0.16, 1, 0.3, 1);
+    }
+
+    @keyframes popIn {
+      from { opacity: 0; transform: scale(0.96) translateY(4px); }
+      to { opacity: 1; transform: scale(1) translateY(0); }
+    }
+
+    .tt-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-light);
+      padding-bottom: 8px;
+      margin-bottom: 10px;
+    }
+
+    .tt-title {
+      font-size: 11px;
+      font-weight: 700;
+      color: var(--text-muted);
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+    }
+
+    .tt-badge {
+      font-size: 10px;
+      font-weight: 700;
+      padding: 2px 7px;
+      border-radius: 6px;
+    }
+
+    .tt-badge.solid {
+      background: rgba(13, 148, 136, 0.14);
+      color: var(--accent-teal);
+    }
+
+    .tt-badge.dashed {
+      background: rgba(217, 119, 6, 0.14);
+      color: var(--accent-amber);
+    }
+
+    .tt-flow {
+      display: flex;
+      align-items: center;
+      justify-content: space-between;
+      background: var(--bg-code);
+      border: 1px solid var(--border-light);
+      border-radius: 8px;
+      padding: 8px 12px;
+      margin-bottom: 10px;
+    }
+
+    .tt-endpoint {
+      display: flex;
+      flex-direction: column;
+    }
+
+    .tt-table {
+      font-weight: 700;
+      font-size: 13px;
+    }
+
+    .tt-col {
+      font-family: var(--font-mono);
+      font-size: 11px;
+      color: var(--accent-blue);
+    }
+
+    .tt-arrow {
+      color: var(--text-muted);
+      font-size: 15px;
+    }
+
+    .tt-meta {
+      font-size: 12px;
+      color: var(--text-muted);
+      display: flex;
+      flex-direction: column;
+      gap: 4px;
+    }
+
+    .tt-meta-item strong {
+      color: var(--text-primary);
+    }
+
+    /* Mermaid View */
+    .mermaid-view {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 24px;
+      display: none;
+      margin-top: 12px;
+    }
+
+    .mermaid-header {
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      margin-bottom: 16px;
+    }
+
+    .mermaid-code {
+      background: var(--bg-code);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-md);
+      padding: 18px;
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+      line-height: 1.6;
+      white-space: pre;
+      overflow-x: auto;
+      color: var(--text-primary);
+    }
+
+    /* Table Cards */
+    .table-section-title {
+      font-size: 17px;
+      font-weight: 700;
+      margin: 40px 0 16px;
+      display: flex;
+      align-items: center;
+      gap: 8px;
+    }
+
+    .table-grid {
+      display: flex;
+      flex-direction: column;
+      gap: 20px;
+    }
+
+    .table-card {
+      background: var(--bg-surface);
+      border: 1px solid var(--border-light);
+      border-radius: var(--radius-lg);
+      overflow: hidden;
+      box-shadow: var(--shadow-sm);
+      transition: border 0.15s, box-shadow 0.15s;
+    }
+
+    .table-card:hover {
+      border-color: var(--accent-blue);
+      box-shadow: var(--shadow-md);
+    }
+
+    .table-card-header {
+      padding: 14px 20px;
+      background: var(--bg-hover);
+      display: flex;
+      justify-content: space-between;
+      align-items: center;
+      border-bottom: 1px solid var(--border-light);
+    }
+
+    .table-card-title {
+      display: flex;
+      align-items: center;
+      gap: 10px;
+    }
+
+    .icon-circle {
+      color: var(--accent-blue);
+      font-size: 14px;
+    }
+
+    .table-card-title h3 {
+      font-size: 15px;
+      font-weight: 700;
+    }
+
+    .col-badge {
+      font-size: 10px;
+      font-weight: 600;
+      background: var(--border-light);
+      padding: 2px 8px;
+      border-radius: 20px;
+      color: var(--text-muted);
+    }
+
+    .mini-table {
+      width: 100%;
+      border-collapse: collapse;
+      font-size: 13px;
+    }
+
+    .mini-table th {
+      text-align: left;
+      padding: 9px 20px;
+      font-size: 10px;
+      text-transform: uppercase;
+      letter-spacing: 0.5px;
+      color: var(--text-muted);
+      background: var(--bg-surface);
+      border-bottom: 1px solid var(--border-light);
+      font-weight: 600;
+    }
+
+    .mini-table td {
+      padding: 9px 20px;
+      border-bottom: 1px solid var(--border-light);
+      color: var(--text-primary);
+      font-family: var(--font-mono);
+      font-size: 12.5px;
+    }
+
+    .mini-table tr:last-child td {
+      border-bottom: none;
+    }
+
+    .mini-table tr:hover td {
+      background: var(--bg-hover);
+    }
+
+    .tag {
+      font-size: 9px;
+      font-weight: 700;
+      padding: 2px 6px;
+      border-radius: 4px;
+      margin-left: 8px;
+      font-family: var(--font-sans);
+      text-transform: uppercase;
+      letter-spacing: 0.3px;
+    }
+
+    .tag-pk {
+      background: var(--accent-blue-soft);
+      color: var(--accent-blue);
+    }
+
+    .tag-fk {
+      background: #fef3c7;
+      color: #b45309;
+    }
+
+    @media (prefers-color-scheme: dark) {
+      .tag-fk {
+        background: #4a3410;
+        color: #fbbf24;
+      }
+    }
+
+    .tag-uq {
+      background: var(--bg-code);
+      color: var(--text-secondary);
+    }
+
+    code {
+      font-family: var(--font-mono);
+      font-size: 12px;
+      background: var(--bg-code);
+      padding: 2px 6px;
+      border-radius: 5px;
+    }
+
+    .empty-findings {
+      background: var(--bg-surface);
+      border: 1px dashed var(--border-light);
+      border-radius: var(--radius-lg);
+      padding: 28px;
+      text-align: center;
+      color: var(--text-muted);
+      font-size: 13px;
+    }
+
+    .sidebar-footer {
+      padding: 12px 16px;
+      border-top: 1px solid var(--border-light);
+      font-size: 11px;
+      color: var(--text-muted);
+      display: flex;
+      justify-content: space-between;
+    }
+
+    ${ERD_CSS}
+  </style>
 </head>
 <body>
-
-<!-- Left Collapsible Sidebar -->
-<aside id="sidebar">
-  <div class="sidebar-header">
-    <div class="sidebar-brand">
-      <span class="logo-badge" style="padding: 2px 7px; font-size: 11px;">TABLES</span>
-      <span>Catalog (${m.tables.length})</span>
+  <!-- Sidebar -->
+  <aside class="sidebar" id="sidebar">
+    <div class="sidebar-header">
+      <span class="logo-badge">SCHEMASAGE</span>
     </div>
+    <div class="sidebar-search">
+      <input type="search" id="sidebarSearch" placeholder="Filter tables\u2026" autocomplete="off">
+    </div>
+    <div class="sidebar-list" id="sidebarList">
+      ${sidebarItems}
+    </div>
+    <div class="sidebar-footer">
+      <span>${m.tables.length} tables</span>
+      <span>${esc(m.source.adapter)}</span>
+    </div>
+  </aside>
+
+  <!-- Main Area -->
+  <div class="main-wrapper">
+    <div class="top-bar">
+      <div class="brand-area">
+        <button class="menu-toggle" id="menuToggle" title="Toggle Sidebar">\u2630</button>
+        <div class="title-block">
+          <h1>Architecture &amp; ER Explorer</h1>
+          <div class="subtitle">
+            <span>${esc(m.source.adapter)}</span> \xB7 ${m.tables.length} tables \xB7 ${m.relationships.length} relations
+          </div>
+        </div>
+      </div>
+      <div class="nav-links">
+        <a href="#diagram">Diagram</a>
+        <a href="#tables">Tables</a>
+        <a href="#relationships">Relationships</a>
+        <a href="#findings">Findings</a>
+      </div>
+    </div>
+
+    <main>
+      <!-- Guide Banner -->
+      <div class="guide-banner">
+        <div class="guide-icon">\u{1F4A1}</div>
+        <div class="guide-text">
+          <strong>Solid lines</strong> = DB-enforced foreign key. <strong>Dashed</strong> = ORM-declared only.
+          <span style="margin-left: 12px;">Hover any line for Archify-style linkage details, or click a sidebar item to jump.</span>
+        </div>
+        <div class="guide-badge">
+          <span class="dot green"></span> DB FK
+          <span class="dot amber"></span> ORM FK
+        </div>
+      </div>
+
+      <!-- Stats Row -->
+      <div class="stats-row">
+        <div class="stat-card">
+          <div class="stat-label">Tables</div>
+          <div class="stat-value">${m.tables.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Columns</div>
+          <div class="stat-value">${m.tables.reduce((sum, t) => sum + t.columns.length, 0)}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Relationships</div>
+          <div class="stat-value">${m.relationships.length}</div>
+        </div>
+        <div class="stat-card">
+          <div class="stat-label">Adapter</div>
+          <div class="stat-value" style="font-size:18px;">${esc(m.source.adapter)}</div>
+        </div>
+      </div>
+
+      <!-- Diagram Section -->
+      <div class="section-header" id="diagram">
+        <h2>Entity-Relationship</h2>
+        <div class="diagram-controls">
+          <div class="view-tabs">
+            <button id="viewVisualBtn" class="active">Visual</button>
+            <button id="viewMermaidBtn">Mermaid</button>
+          </div>
+          <div class="zoom-controls">
+            <button id="zoomOut">-</button>
+            <span class="zoom-level" id="zoomLevel">100%</span>
+            <button id="zoomIn">+</button>
+            <button id="zoomReset" style="font-size:11px; width:auto; padding:0 10px;">Reset</button>
+          </div>
+        </div>
+      </div>
+
+      <!-- Visual Canvas -->
+      <div class="canvas-wrapper" id="visualCanvas">
+        ${erdSvg(m)}
+      </div>
+
+      <!-- Archify-style Floating Relationship Inspector Tooltip -->
+      <div id="rel-tooltip"></div>
+
+      <!-- Mermaid View -->
+      <div class="mermaid-view" id="mermaidView">
+        <div class="mermaid-header">
+          <h3 style="font-size: 14px;">Mermaid ERD Code</h3>
+          <button id="copyMermaid" style="background:var(--bg-code); border:1px solid var(--border-light); padding:6px 12px; border-radius:20px; font-size:12px; font-weight:500; cursor:pointer;">Copy</button>
+        </div>
+        <pre class="mermaid-code" id="mermaidCode">${esc(mermaidCode)}</pre>
+      </div>
+
+      <!-- Tables Section -->
+      <div class="section-header" id="tables">
+        <h2>Table details (${m.tables.length})</h2>
+        <div style="max-width: 280px; width:100%;">
+          <input type="search" id="filter" placeholder="Quick filter table cards..." style="width:100%; padding:6px 14px; border:1px solid var(--border-light); border-radius:30px; background:var(--bg-surface); font-size:13px; color:var(--text-primary); outline:none;">
+        </div>
+      </div>
+
+      <div class="table-grid" id="tableCards">
+        ${tableCards}
+      </div>
+
+      ${appSection(m)}
+
+      <!-- Relationships Section -->
+      <div class="section-header" id="relationships">
+        <h2>Relationships (${m.relationships.length})</h2>
+      </div>
+
+      <div class="table-card">
+        <table class="mini-table">
+          <thead>
+            <tr>
+              <th>From Column</th>
+              <th></th>
+              <th>To Column</th>
+              <th>Cardinality</th>
+              <th>Enforcement</th>
+            </tr>
+          </thead>
+          <tbody>
+            ${relRows}
+          </tbody>
+        </table>
+      </div>
+
+      <!-- Findings Section -->
+      <div class="section-header" id="findings">
+        <h2>Findings (${m.findings.length})</h2>
+      </div>
+      ${findings}
+    </main>
   </div>
-  <div class="sidebar-search-box">
-    <input id="sidebar-filter" type="search" placeholder="Find table..." autocomplete="off">
-  </div>
-  <div class="sidebar-list">
-    ${sidebarItems}
-  </div>
-</aside>
 
-<!-- App Right Content -->
-<div class="app-container">
-  <header>
-    <div class="header-container">
-      <div class="brand-title">
-        <button id="sidebar-toggle" class="sidebar-toggle-btn" title="Toggle Tables Sidebar">\u2630</button>
-        <span class="logo-badge">SCHEMASAGE</span>
-        <div>
-          <h1>Database Architecture</h1>
-          <div class="sub">Adapter: <strong>${esc(m.source.adapter)}</strong> &bull; Generated: ${new Date(m.generatedAt).toLocaleString()}</div>
-        </div>
-      </div>
-      <nav aria-label="Main Sections">
-        <a href="#erd">Diagrams</a>
-        <a href="#tables">Tables (${m.tables.length})</a>
-        <a href="#relationships">Relationships (${m.relationships.length})</a>
-        <a href="#findings">Findings (${m.findings.length})</a>
-        <a href="#coverage">Coverage</a>
-      </nav>
-    </div>
-  </header>
-
-  <main>
-    <div class="learning-guide">
-      <div class="guide-header">
-        <span>\u{1F4A1}</span> Quick Architectural Guide: Understanding This Database
-      </div>
-      <div class="guide-grid">
-        <div class="guide-item">
-          <strong>1. Solid vs. Dashed Lines</strong>
-          <p><span class="enforcement-badge db-enforced">Solid Line</span> = Enforced by DB Foreign Keys. <span class="enforcement-badge orm-declared">Dashed Line</span> = Declared at ORM level only.</p>
-        </div>
-        <div class="guide-item">
-          <strong>2. Archify-Style Inspector Tooltip</strong>
-          <p>Hover over any relationship line or connection dot to inspect precise table/column linkages, cardinality, and source line numbers.</p>
-        </div>
-        <div class="guide-item">
-          <strong>3. Export to Mermaid &amp; Docs</strong>
-          <p>Toggle to the <strong>Mermaid ERD</strong> tab to copy raw diagram code for GitHub PRs, Markdown notes, or documentation.</p>
-        </div>
-      </div>
-    </div>
-
-    <div class="stats-bar">
-      <div class="stat-box">
-        <div class="stat-label">Tables / Collections</div>
-        <div class="stat-value">${m.tables.length}</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-label">Total Columns</div>
-        <div class="stat-value">${m.tables.reduce((sum, t) => sum + t.columns.length, 0)}</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-label">Relationships</div>
-        <div class="stat-value">${m.relationships.length}</div>
-      </div>
-      <div class="stat-box">
-        <div class="stat-label">Adapter Engine</div>
-        <div class="stat-value" style="font-size: 18px; line-height: 38px;">${esc(m.source.adapter)}</div>
-      </div>
-    </div>
-
-    <div class="section-head" id="erd">
-      <h2>Entity-Relationship Diagrams</h2>
-      <div class="diagram-mode-bar">
-        <div class="tabs-ctrl">
-          <button id="tab-visual" class="tab-btn active">Visual Canvas</button>
-          <button id="tab-mermaid" class="tab-btn">Mermaid Code &amp; Export</button>
-        </div>
-        <div class="zoom-bar">
-          <button id="zoom-in" class="btn-ctrl" title="Zoom In">+</button>
-          <span id="zoom-indicator" class="zoom-indicator">100%</span>
-          <button id="zoom-out" class="btn-ctrl" title="Zoom Out">-</button>
-          <button id="zoom-reset" class="btn-ctrl" title="Reset View">Reset</button>
-        </div>
-      </div>
-    </div>
-
-    <div id="view-visual" class="erd-wrap">
-      ${erdSvg(m)}
-      <div class="erd-hint">Click &amp; drag canvas to pan &bull; Hover lines to inspect relationships &bull; Click to view table card</div>
-    </div>
-
-    <!-- Archify-style Floating Relationship Inspector Tooltip -->
-    <div id="rel-tooltip"></div>
-
-    <div id="view-mermaid" class="mermaid-container">
-      <div class="mermaid-header">
-        <div>
-          <strong>Mermaid.js Entity-Relationship Syntax</strong>
-          <div style="font-size: 12px; color: var(--muted);">Embed this directly in Markdown files or render in GitHub issues &amp; PRs.</div>
-        </div>
-        <button id="btn-copy-mermaid" class="btn-ctrl">Copy Mermaid Code</button>
-      </div>
-      <div id="mermaid-code" class="mermaid-code-box">${esc(mermaidCode)}</div>
-    </div>
-
-    <div class="section-head" id="tables">
-      <h2>Tables &amp; Schemas (${m.tables.length})</h2>
-      <div class="search-box">
-        <input id="filter" type="search" placeholder="Filter tables or columns..." autocomplete="off">
-      </div>
-    </div>
-
-    <div class="tables-container">
-      ${tableCards}
-    </div>
-
-    ${appSection(m)}
-
-    <div class="section-head" id="relationships">
-      <h2>Relationships (${m.relationships.length})</h2>
-    </div>
-
-    <div class="table-card">
-      <table class="modern-table">
-        <thead>
-          <tr>
-            <th>From Column</th>
-            <th></th>
-            <th>To Column</th>
-            <th>Cardinality</th>
-            <th>Enforcement Type</th>
-          </tr>
-        </thead>
-        <tbody>
-          ${relRows}
-        </tbody>
-      </table>
-    </div>
-
-    <div class="section-head" id="findings">
-      <h2>Schema Insights &amp; Findings (${m.findings.length})</h2>
-    </div>
-    ${findings}
-
-    <div class="section-head" id="coverage">
-      <h2>Coverage &amp; Inspected Sources</h2>
-    </div>
-    <div class="table-card" style="padding: 20px;">
-      <p><strong>Files Scanned (${m.coverage.filesScanned.length}):</strong></p>
-      <p style="font-size: 12px; line-height: 1.8;">
-        ${m.coverage.filesScanned.map((f) => `<code>${esc(f)}</code>`).join(" ")}
-      </p>
-    </div>
-  </main>
-</div>
-
-<script>${FILTER_SCRIPT}</script>
+  <script>${FILTER_SCRIPT}</script>
 </body>
 </html>
 `;
