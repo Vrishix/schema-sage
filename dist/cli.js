@@ -1793,7 +1793,7 @@ function erdSvg(model) {
     `<svg class="erd-canvas" viewBox="0 0 ${maxX} ${maxY}" width="${maxX}" height="${maxY}" xmlns="http://www.w3.org/2000/svg">`,
     `<defs>
       <filter id="shadow" x="-5%" y="-5%" width="110%" height="115%">
-        <feDropShadow dx="0" dy="4" stdDeviation="6" flood-opacity="0.08"/>
+        <feDropShadow dx="0" dy="2" stdDeviation="4" flood-opacity="0.06"/>
       </filter>
     </defs>`
   ];
@@ -1859,7 +1859,7 @@ function erdSvg(model) {
       const colClass = isPk ? "col pk" : isUq ? "col uq" : "col";
       if (badge) {
         parts.push(`<rect x="${node.x + 10}" y="${yy - 11}" width="${badge === "PK" ? 22 : 24}" height="14" rx="3" class="badge-bg ${isPk ? "badge-pk" : "badge-uq"}"/>`);
-        parts.push(`<text x="${node.x + (badge === "PK" ? 21 : 22)}" y="${yy}" text-anchor="middle" class="badge-text">${badge}</text>`);
+        parts.push(`<text x="${node.x + (badge === "PK" ? 21 : 22)}" y="${yy}" text-anchor="middle" class="badge-text ${isPk ? "badge-pk-text" : "badge-uq-text"}">${badge}</text>`);
         parts.push(`<text x="${node.x + 38}" y="${yy}" class="${colClass}">${esc(c.name)}</text>`);
       } else {
         parts.push(`<text x="${node.x + 14}" y="${yy}" class="${colClass}">${esc(c.name)}</text>`);
@@ -1872,116 +1872,113 @@ function erdSvg(model) {
   return parts.join("\n");
 }
 var ERD_CSS = `
-.erd-wrap {
-  position: relative;
-  overflow: hidden;
-  max-height: 82vh;
-  min-height: 520px;
-  border: 1px solid var(--card-border);
-  border-radius: 16px;
-  background: var(--canvas-bg);
-  padding: 16px;
-  cursor: grab;
-  box-shadow: inset 0 2px 6px rgba(0,0,0,0.02);
-}
 .erd-canvas {
   display: block;
-  font-family: inherit;
+  font-family: var(--font-sans);
   transition: transform 0.15s ease-out;
 }
-.erd-wrap .box {
-  fill: var(--card-bg);
-  stroke: var(--card-border);
+.box {
+  fill: var(--bg-surface);
+  stroke: var(--border-light);
   stroke-width: 1.5;
   transition: all 0.2s cubic-bezier(0.16, 1, 0.3, 1);
 }
-.erd-wrap .box-head {
-  fill: var(--card-head);
-  stroke: var(--card-border);
+.box-head {
+  fill: var(--bg-hover);
+  stroke: var(--border-light);
   stroke-width: 1.5;
 }
-.erd-wrap .table-name {
+.table-name {
   font-weight: 700;
   font-size: 13px;
-  fill: var(--fg);
+  fill: var(--text-primary);
 }
-.erd-wrap .table-count {
+.table-count {
   font-size: 11px;
   font-weight: 500;
-  fill: var(--muted);
+  fill: var(--text-muted);
 }
-.erd-wrap .col {
-  font-size: 12px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  fill: var(--fg);
+.col {
+  font-size: 11.5px;
+  font-family: var(--font-mono);
+  fill: var(--text-primary);
 }
-.erd-wrap .col.pk {
+.col.pk {
   font-weight: 600;
-  fill: var(--accent);
+  fill: var(--accent-blue);
 }
-.erd-wrap .col.uq {
+.col.uq {
   font-weight: 600;
 }
-.erd-wrap .col-type {
-  font-size: 11px;
-  font-family: ui-monospace, SFMono-Regular, Menlo, monospace;
-  fill: var(--muted);
+.col-type {
+  font-size: 10px;
+  font-family: var(--font-mono);
+  fill: var(--text-muted);
 }
-.erd-wrap .badge-bg {
-  opacity: 0.9;
+.badge-bg {
+  opacity: 0.95;
 }
-.erd-wrap .badge-pk {
-  fill: var(--accent-light);
+.badge-pk {
+  fill: var(--accent-blue-soft);
 }
-.erd-wrap .badge-uq {
-  fill: var(--amber-light);
+.badge-uq {
+  fill: #fef3c7;
 }
-.erd-wrap .badge-text {
-  font-size: 9px;
+@media (prefers-color-scheme: dark) {
+  .badge-uq {
+    fill: #452203;
+  }
+}
+.badge-text {
+  font-size: 8.5px;
   font-weight: 700;
-  font-family: system-ui, sans-serif;
-  fill: var(--accent-dark);
+  font-family: var(--font-sans);
 }
-.erd-wrap .edge-bubble {
-  fill: var(--card-bg);
-  stroke: var(--line);
+.badge-pk-text {
+  fill: var(--accent-blue);
+}
+.badge-uq-text {
+  fill: var(--accent-amber);
+}
+.edge-bubble {
+  fill: var(--bg-surface);
+  stroke: var(--border-light);
   stroke-width: 1.2;
 }
-.erd-wrap .edge-label {
-  font-size: 9.5px;
+.edge-label {
+  font-size: 9px;
   font-weight: 600;
-  font-family: system-ui, sans-serif;
-  fill: var(--muted);
+  font-family: var(--font-sans);
+  fill: var(--text-muted);
 }
-.erd-wrap .edge {
+.edge {
   stroke-width: 1.8;
   cursor: pointer;
   transition: stroke 0.2s, stroke-width 0.2s, opacity 0.2s;
 }
-.erd-wrap .edge.db-enforced {
-  stroke: var(--solid);
+.edge.db-enforced {
+  stroke: var(--accent-teal);
 }
-.erd-wrap .edge.orm-declared {
-  stroke: var(--dash);
+.edge.orm-declared {
+  stroke: var(--accent-amber);
 }
-.erd-wrap .entity {
+.entity {
   cursor: pointer;
   transition: transform 0.2s, opacity 0.2s;
 }
-.erd-wrap .entity:hover {
+.entity:hover {
   transform: translateY(-2px);
 }
-.erd-wrap .entity:hover .box {
-  stroke: var(--accent);
+.entity:hover .box {
+  stroke: var(--accent-blue);
   stroke-width: 2.2;
-  box-shadow: 0 10px 25px -5px rgba(0, 0, 0, 0.1);
 }
-.erd-wrap .edge-group {
+.edge-group {
   cursor: pointer;
 }
-.erd-wrap .edge-group:hover .edge {
-  stroke: var(--accent-hover);
-  stroke-width: 4;
+.edge-group:hover .edge {
+  stroke: var(--accent-blue);
+  stroke-width: 3.8;
 }
 `;
 
